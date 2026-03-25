@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RegisterView, LoginView, RefreshView, MeView, SetRoleView,UpdateProfileView,SaveFCMTokenView
+from .views import RegisterView, LoginView, RefreshView, MeView, SetRoleView,SaveFCMTokenView
 
 urlpatterns = [
     path("register", RegisterView.as_view()),
@@ -7,6 +7,6 @@ urlpatterns = [
     path("refresh",  RefreshView.as_view()),
     path("me",       MeView.as_view()),
     path("role",     SetRoleView.as_view()),
-    path("profile",  UpdateProfileView.as_view()),
+
     path("fcm-token", SaveFCMTokenView.as_view()),
 ]
