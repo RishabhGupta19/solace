@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Message
-
+print("debug")  # temporary
 
 client = Groq(api_key=settings.GROQ_KEY)
 
