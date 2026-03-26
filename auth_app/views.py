@@ -29,20 +29,16 @@ def _get_or_create_couple_code(user):
 
 def _serialize_user(user):
     # Ensure we don't raise when optional attributes are missing
-    partner_profile_picture_url = None
+  
     if getattr(user, "is_linked", False) and getattr(user, "couple_id", None):
         try:
             link = CoupleLink.objects.get(id=user.couple_id)
             partner_id = link.partner_id if link.creator_id == str(user.id) else link.creator_id
             partner = User.objects.get(id=partner_id)
-            partner_profile_picture_url = getattr(partner, "profile_picture_url", None)
-        except Exception:
-            # If partner or link not found or any other issue, ignore and leave None
-            partner_profile_picture_url = None
-
-    profile_picture_url = getattr(user, "profile_picture_url", None)
-    profile = getattr(user, "assessment_profile", None)
-
+        
+        except (CoupleLink.DoesNotExist, User.DoesNotExist):
+            pass
+    
     return {
         "id": str(user.id),
         "name": user.name,
@@ -51,10 +47,9 @@ def _serialize_user(user):
         "couple_id": user.couple_id,
         "assessment_completed": getattr(user, "assessment_completed", False),
         "partner_name": user.partner_name,
-        "profile_picture_url": profile_picture_url,
-        "partner_profile_picture_url": partner_profile_picture_url,
-        "is_linked": getattr(user, "is_linked", False),
-        "role": getattr(user, "role", None),
+      
+        "is_linked": user.is_linked,
+        "assessment_completed": user.assessment_completed,
         "assessment_profile": {
             "personality_summary": getattr(profile, "personality_summary", ""),
             "attachment_style": getattr(profile, "attachment_style", ""),
