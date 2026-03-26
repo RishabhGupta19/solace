@@ -9,6 +9,8 @@ class Message(me.Document):
     sender_role = me.StringField(choices=["gf", "bf"], default=None)
     seen = me.BooleanField(default=False)
     seen_at = me.DateTimeField(default=None)
+    seen = me.BooleanField(default=False)
+    seen_at = me.DateTimeField(default=None)
     text = me.StringField(required=True)
     mode = me.StringField(choices=["calm", "vent"], required=True)
     timestamp = me.DateTimeField(default=datetime.utcnow)
