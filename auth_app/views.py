@@ -7,7 +7,6 @@ from .utils import hash_password, check_password, generate_tokens, decode_token
 import jwt
 import random
 import string
-from rest_framework import status
 
 
 def _generate_code():
@@ -28,9 +27,12 @@ def _get_or_create_couple_code(user):
 
 
 def _serialize_user(user):
-    # Ensure we don't raise when optional attributes are missing
-  
-    if getattr(user, "is_linked", False) and getattr(user, "couple_id", None):
+    couple_code = _get_or_create_couple_code(user)
+    profile = getattr(user, "assessment_profile", None)
+    
+    # Fetch partner's profile picture if linked
+    
+    if user.is_linked and user.couple_id:
         try:
             link = CoupleLink.objects.get(id=user.couple_id)
             partner_id = link.partner_id if link.creator_id == str(user.id) else link.creator_id
@@ -44,8 +46,9 @@ def _serialize_user(user):
         "name": user.name,
         "nickname": user.nickname or "",
         "email": user.email,
+        "role": user.role,
         "couple_id": user.couple_id,
-        "assessment_completed": getattr(user, "assessment_completed", False),
+        "couple_code": couple_code,
         "partner_name": user.partner_name,
       
         "is_linked": user.is_linked,
@@ -56,49 +59,52 @@ def _serialize_user(user):
             "emotional_triggers": getattr(profile, "emotional_triggers", ""),
             "communication_habits": getattr(profile, "communication_habits", ""),
             "relational_expectations": getattr(profile, "relational_expectations", ""),
-            "traits": getattr(profile, "traits", {}),
-        } if getattr(user, "assessment_completed", False) else None,
+            "traits": getattr(profile, "traits", []),
+        } if user.assessment_completed and profile else None,
+        "created_at": user.created_at.isoformat(),
     }
-
-
+    
+# New endpoint to save FCM token
 class SaveFCMTokenView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        token = request.data.get("fcm_token", "").strip()
-        if not token:
-            return Response({"error": "fcm_token is required"}, status=status.HTTP_400_BAD_REQUEST)
+        token = request.data.get("fcm_token", "")
         user = request.user
         user.fcm_token = token
         user.save()
-        return Response({"message": "FCM token saved"})
+        return Response({"message": "Token saved"})
+    
+class UpdateProfileView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    def put(self, request):
+        user = request.user
+        nickname = request.data.get("nickname", "").strip()
+        if nickname:
+            user.nickname = nickname
+            user.save()
+        return Response({"user": _serialize_user(user)})
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        data = request.data or {}
-        name = (data.get("name") or "").strip()
-        email = (data.get("email") or "").strip().lower()
-        password = data.get("password") or ""
-        nickname = (data.get("nickname") or "").strip()
+        data = request.data
+        name = data.get("name", "").strip()
+        email = data.get("email", "").strip().lower()
+        password = data.get("password", "")
 
         if not name or not email or not password:
-            return Response({"error": "name, email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "name, email, and password are required"}, status=400)
 
         if User.objects(email=email).first():
-            return Response({"error": "User with this email already exists"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Email already registered"}, status=400)
 
-        user = User(
-            name=name,
-            email=email,
-            password=hash_password(password),
-            nickname=nickname,
-        )
+        user = User(name=name, email=email, password=hash_password(password))
         user.save()
 
-        # create a couple link for the user if desired
+        # Auto-generate couple code
         for _ in range(10):
             code = _generate_code()
             if not CoupleLink.objects(code=code).first():
@@ -110,24 +116,20 @@ class RegisterView(APIView):
             "message": "Registered successfully",
             "user": _serialize_user(user),
             **tokens,
-        }, status=status.HTTP_201_CREATED)
+        }, status=201)
 
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = (request.data.get("email") or "").strip().lower()
-        password = request.data.get("password") or ""
+        email = request.data.get("email", "").strip().lower()
+        password = request.data.get("password", "")
         user = User.objects(email=email).first()
         if not user or not check_password(password, user.password):
-            return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Invalid credentials"}, status=401)
         tokens = generate_tokens(str(user.id))
-        response_data = {"user": _serialize_user(user), **tokens}
-        # If assessment is completed, instruct client to redirect to dashboard
-        if getattr(user, "assessment_completed", False):
-            response_data["redirect"] = "/dashboard"
-        return Response(response_data)
+        return Response({"user": _serialize_user(user), **tokens})
 
 
 class RefreshView(APIView):
@@ -138,17 +140,17 @@ class RefreshView(APIView):
         try:
             payload = decode_token(token)
         except jwt.ExpiredSignatureError:
-            return Response({"error": "Refresh token expired"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Refresh token expired"}, status=401)
         except jwt.InvalidTokenError:
-            return Response({"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Invalid token"}, status=401)
 
         if payload.get("type") != "refresh":
-            return Response({"error": "Invalid token type"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Invalid token type"}, status=401)
 
         try:
             user = User.objects.get(id=payload["user_id"])
-        except Exception:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
 
         tokens = generate_tokens(str(user.id))
         return Response(tokens)
@@ -167,7 +169,7 @@ class SetRoleView(APIView):
     def put(self, request):
         role = request.data.get("role")
         if role not in ["gf", "bf"]:
-            return Response({"error": "role must be 'gf' or 'bf'"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "role must be 'gf' or 'bf'"}, status=400)
         user = request.user
         user.role = role
         user.save()
