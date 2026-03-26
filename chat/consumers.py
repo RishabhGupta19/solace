@@ -23,6 +23,17 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data):
         data = json.loads(text_data)
+        if data.get("type") == "seen":
+            await self.mark_messages_seen(data.get("message_ids", []))
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    "type": "messages_seen",
+                    "message_ids": data.get("message_ids", []),
+                    "seen_by": self.user_id,
+                }
+            )
+            return
 
         # Handle typing indicator
         if data.get("type") == "typing":
@@ -56,7 +67,21 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
                 "timestamp": message.timestamp.isoformat(),
             }
         )
+    async def messages_seen(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "seen",
+            "message_ids": event["message_ids"],
+            "seen_by": event["seen_by"],
+        }))
 
+    @database_sync_to_async
+    def mark_messages_seen(self, message_ids):
+        from chat.models import Message
+        from datetime import datetime
+        Message.objects(
+            id__in=message_ids,
+            user_id__ne=self.user_id  # only mark partner's messages
+        ).update(seen=True, seen_at=datetime.utcnow())
     async def chat_message(self, event):
         await self.send(text_data=json.dumps({
             "id": event["id"],

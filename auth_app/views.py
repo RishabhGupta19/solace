@@ -31,13 +31,13 @@ def _serialize_user(user):
     profile = user.assessment_profile
     
     # Fetch partner's profile picture if linked
-    partner_profile_picture_url = None
+    
     if user.is_linked and user.couple_id:
         try:
             link = CoupleLink.objects.get(id=user.couple_id)
             partner_id = link.partner_id if link.creator_id == str(user.id) else link.creator_id
             partner = User.objects.get(id=partner_id)
-            partner_profile_picture_url = partner.profile_picture_url
+        
         except (CoupleLink.DoesNotExist, User.DoesNotExist):
             pass
     
@@ -50,8 +50,7 @@ def _serialize_user(user):
         "couple_id": user.couple_id,
         "couple_code": couple_code,
         "partner_name": user.partner_name,
-        "profile_picture_url": user.profile_picture_url,
-        "partner_profile_picture_url": partner_profile_picture_url,
+      
         "is_linked": user.is_linked,
         "assessment_completed": user.assessment_completed,
         "assessment_profile": {

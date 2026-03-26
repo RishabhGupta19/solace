@@ -7,6 +7,8 @@ class Message(me.Document):
     user_id = me.StringField(default=None)  # ← add this
     sender = me.StringField(choices=["user", "ai"], required=True)
     sender_role = me.StringField(choices=["gf", "bf"], default=None)
+    seen = me.BooleanField(default=False)
+    seen_at = me.DateTimeField(default=None)
     text = me.StringField(required=True)
     mode = me.StringField(choices=["calm", "vent"], required=True)
     timestamp = me.DateTimeField(default=datetime.utcnow)
