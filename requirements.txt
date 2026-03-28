@@ -8,5 +8,5 @@ bcrypt>=4.1
 PyJWT>=2.8
 channels>=4.0
 daphne>=4.0
-
+cloudinary>=1.36
 firebase-admin>=6.0
