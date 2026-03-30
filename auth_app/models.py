@@ -18,6 +18,7 @@ class User(me.Document):
     email = me.StringField(required=True, unique=True)
     password = me.StringField(required=True)
     nickname = me.StringField(default="")
+    onboarding_complete = me.BooleanField(default=False)
     fcm_token = me.StringField(default="")
     role = me.StringField(choices=["gf", "bf"], default=None)
     couple_id = me.StringField(default=None)

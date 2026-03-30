@@ -53,6 +53,7 @@ def _serialize_user(user):
       
         "is_linked": user.is_linked,
         "assessment_completed": user.assessment_completed,
+        "onboarding_complete": user.onboarding_complete if hasattr(user, 'onboarding_complete') else False,
         "assessment_profile": {
             "personality_summary": getattr(profile, "personality_summary", ""),
             "attachment_style": getattr(profile, "attachment_style", ""),
@@ -80,10 +81,12 @@ class UpdateProfileView(APIView):
 
     def put(self, request):
         user = request.user
+        
         nickname = request.data.get("nickname", "").strip()
         if nickname:
             user.nickname = nickname
-            user.save()
+        user.onboarding_complete = True  
+        user.save()
         return Response({"user": _serialize_user(user)})
 
 class RegisterView(APIView):
