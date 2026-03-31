@@ -93,12 +93,10 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
                     )
                 ),
             ),
+            # For web, send only data and optional fcm_options; do not include a
+            # webpush Notification object so the browser doesn't auto-display
+            # a notification (we let the service worker control display).
             webpush=messaging.WebpushConfig(
-                notification=messaging.WebpushNotification(
-                    title=title,
-                    body=body,
-                    icon=icon_url,
-                ),
                 **webpush_kwargs,
             ),
             token=fcm_token,
