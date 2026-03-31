@@ -4,6 +4,7 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import os
 import json
+from urllib.parse import urlparse
 
 
 def _init_firebase():
@@ -48,6 +49,25 @@ def send_push_notification(fcm_token: str, title: str, body: str):
         print("Firebase not initialized — skipping notification")
         return None
     try:
+        # Build webpush config with safe validation of FRONTEND_URL
+        frontend = os.getenv('FRONTEND_URL', '').strip()
+        parsed = urlparse(frontend) if frontend else None
+        icon_url = '/icon-192.png'
+        webpush_kwargs = {}
+
+        if parsed and parsed.scheme and parsed.netloc:
+            # Use full icon URL only when frontend is a valid absolute URL
+            icon_url = f"{frontend.rstrip('/')}/icon-192.png"
+            # Only include fcm_options.link when it's HTTPS
+            if parsed.scheme.lower() == 'https':
+                webpush_kwargs['fcm_options'] = messaging.WebpushFCMOptions(link=frontend)
+                print(f"Using secure FRONTEND_URL for webpush link: {frontend}")
+            else:
+                print(f"FRONTEND_URL is not HTTPS, omitting webpush link: {frontend}")
+        else:
+            if frontend:
+                print(f"FRONTEND_URL looks invalid, omitting webpush link: {frontend}")
+
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
@@ -74,12 +94,9 @@ def send_push_notification(fcm_token: str, title: str, body: str):
                 notification=messaging.WebpushNotification(
                     title=title,
                     body=body,
-                    icon=f"{os.getenv('FRONTEND_URL', 'https://two-hearts-chat.vercel.app')}/icon-192.png",
+                    icon=icon_url,
                 ),
-                # Only include a link if a secure FRONTEND_URL is provided
-                **({
-                    'fcm_options': messaging.WebpushFCMOptions(link=frontend)
-                } if (frontend := os.getenv('FRONTEND_URL', '').strip()).lower().startswith('https://') else {}),
+                **webpush_kwargs,
             ),
             token=fcm_token,
         )
