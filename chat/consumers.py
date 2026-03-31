@@ -197,6 +197,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
                         partner.fcm_token,
                         title="New message 💬",
                         body=text[:50],
+                        extra_data={"message_id": str(msg.id)},
                     )
         except Exception as e:
             print(f"Notification error: {e}")
