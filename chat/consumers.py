@@ -108,7 +108,29 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             "message_ids": event["message_ids"],
             "seen_by":     event["seen_by"],
         }))
+    
+    async def voice(self, event):
+        """Handle voice messages sent via channel layer group_send with type 'voice'.
 
+        This prevents Channels from raising "No handler for message type voice"
+        if other parts of the system publish voice events.
+        """
+        await self.send(text_data=json.dumps({
+            "type": "voice",
+            "id": event.get("id", ""),
+            "url": event.get("url", ""),
+            "sender_id": event.get("sender_id", ""),
+            "sender_name": event.get("sender_name", ""),
+            "timestamp": event.get("timestamp", ""),
+        }))
+    async def connect(self):
+        self.couple_id = self.scope["url_route"]["kwargs"]["couple_id"]
+        self.room_group_name = f"calm_{self.couple_id}"
+        self.user_role = await self.get_role_from_token()
+        self.user_id = await self.get_user_id_from_token()  # ← add this
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        await self.accept()
+        
     async def typing_indicator(self, event):
         # Only forward to other connections, not the sender
         if event.get("channel") != self.channel_name:
