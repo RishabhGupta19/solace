@@ -3,8 +3,7 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Message
-print("debug")  # temporary
+from .models import Message, VoiceMessage
 
 client = Groq(api_key=settings.GROQ_KEY)
 
@@ -20,13 +19,14 @@ def _groq(prompt: str) -> str:
 
 def _serialize_message(m):
     return {
-        "id": str(m.id),
-        "sender": m.sender,
+        "id":          str(m.id),
+        "type":        "text",
+        "sender":      m.sender,
         "sender_role": m.sender_role,
-        "sender_id": m.user_id or "",
-        "text": m.text,
-        "mode": m.mode,
-        "timestamp": m.timestamp.isoformat(),
+        "sender_id":   m.user_id or "",
+        "text":        m.text,
+        "mode":        m.mode,
+        "timestamp":   m.timestamp.isoformat(),
     }
 
 
@@ -34,17 +34,53 @@ class MessagesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        mode = request.query_params.get("mode")
+        import os
+        from datetime import datetime
+        user      = request.user
+        mode      = request.query_params.get("mode")
         couple_id = user.couple_id or str(user.id)
+
+        # ── Lazy deletion: silently purge expired voice messages on every load ─
+        try:
+            expired = VoiceMessage.objects(couple_id=couple_id, expires_at__lte=datetime.utcnow())
+            for vm in expired:
+                try:
+                    file_path = os.path.join(settings.BASE_DIR, vm.audio_url.lstrip("/"))
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception:
+                    pass
+            expired.delete()
+        except Exception:
+            pass  # never let cleanup crash the fetch
+
+        # ── Fetch text messages ─────────────────────────────────────────
         qs = Message.objects(couple_id=couple_id)
-        
         if mode == "vent":
             qs = qs.filter(mode="vent", user_id=str(user.id))
         elif mode == "calm":
             qs = qs.filter(mode="calm")
-        
-        return Response({"messages": [_serialize_message(m) for m in qs]})
+        text_messages = [_serialize_message(m) for m in qs]
+
+        # ── Fetch voice messages (same mode filter) ────────────────────────
+        vqs = VoiceMessage.objects(couple_id=couple_id)
+        if mode == "vent":
+            vqs = vqs.filter(mode="vent", user_id=str(user.id))
+        elif mode == "calm":
+            vqs = vqs.filter(mode="calm")
+        voice_messages = [
+            _serialize_voice_message(vm, request=request, current_user_id=str(user.id))
+            for vm in vqs
+        ]
+
+        # ── Merge and sort by timestamp ──────────────────────────────────
+        all_messages = sorted(
+            text_messages + voice_messages,
+            key=lambda x: x["timestamp"],
+        )
+
+        return Response({"messages": all_messages})
+
 
     def post(self, request):
         user = request.user
@@ -58,83 +94,6 @@ class MessagesView(APIView):
         msg = Message(couple_id=couple_id, user_id=str(user.id), sender="user", sender_role=user.role, text=text, mode=mode)      
         msg.save()
         return Response(_serialize_message(msg), status=201)
-
-
-
-# class AIRespondView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request):
-#         user = request.user
-#         mode = request.data.get("mode", "vent")
-#         message_text = request.data.get("message", "")
-
-#         if mode == "calm":
-#             return Response({"error": "AI is only available in vent mode"}, status=400)
-
-#         profile = user.assessment_profile
-#         traits_text = "\n".join(f"- {k}: {v}" for k, v in (profile.traits or {}).items())
-
-#         system_prompt = f"""You are Luna, a deeply empathetic personal companion specifically attuned to this person.
-
-# ABOUT THIS PERSON:
-# {profile.personality_summary}
-
-# Attachment style: {profile.attachment_style}
-# Emotional triggers: {profile.emotional_triggers}
-# Communication habits: {profile.communication_habits}
-# Relational expectations: {profile.relational_expectations}
-# Traits:
-# {traits_text}
-
-# YOUR ROLE:
-# - You are their trusted companion who truly knows them personally
-# - Use their profile to personalize EVERY response
-# - Make them feel deeply heard and never alone
-# - Follow this flow: Acknowledge → Validate → Gently explore → Support
-# - Ask ONE follow-up question max per message
-# - Never lecture, minimize, or rush to fix
-# - Keep responses warm and under 120 words
-# - Speak like a caring friend who truly knows them"""
-
-#         # Fetch last 10 messages as conversation history from MongoDB
-#         couple_id = user.couple_id or str(user.id)
-#         # Fetch last 10 messages (both user and AI) for this specific user
-#         history = list(Message.objects(
-#             couple_id=couple_id,
-#             mode="vent",
-#             user_id=str(user.id),  # ← use user_id not sender_role
-#         ).order_by("-timestamp")[:20])  # fetch 20, reverse to get chronological
-#         history = list(reversed(history))
-
-#         # Build messages for Groq
-#         messages = [{"role": "system", "content": system_prompt}]
-#         for msg in history:
-#             role = "user" if msg.sender == "user" else "assistant"
-#             messages.append({"role": role, "content": msg.text})
-#         messages.append({"role": "user", "content": message_text})
-
-#         try:
-#             response = client.chat.completions.create(
-#                 model="llama-3.1-8b-instant",
-#                 messages=messages,
-#                 temperature=0.85,
-#                 max_tokens=200,
-#             )
-#             ai_text = response.choices[0].message.content.strip()
-
-#             ai_msg = Message(
-#                 couple_id=couple_id,
-#                 user_id=str(user.id),
-#                 sender="ai",
-#                 text=ai_text,
-#                 mode="vent",
-#                 sender_role=user.role,
-#             )
-#             ai_msg.save()
-#             return Response(_serialize_message(ai_msg))
-#         except Exception as e:
-#             return Response({"error": str(e)}, status=500)
 
 
 class AIRespondView(APIView):
@@ -317,3 +276,166 @@ class ResolveVentView(APIView):
         # Only delete current user's vent messages
         Message.objects(couple_id=couple_id, mode="vent", user_id=str(user.id)).delete()
         return Response({"message": "Vent session resolved"})
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _serialize_voice_message(vm, request=None, current_user_id=None):
+    import os
+    audio_url = vm.audio_url
+    file_lost = False
+
+    if not audio_url:
+        file_lost = True
+    elif audio_url.startswith("/"):           # local file
+        local_path = os.path.join(settings.BASE_DIR, audio_url.lstrip("/"))
+        file_lost  = not os.path.exists(local_path)
+        if not file_lost and request:
+            audio_url = request.build_absolute_uri(audio_url)
+    # Cloudinary https:// URLs are always available — file_lost stays False
+    elif audio_url.startswith("http") and request:
+        pass   # keep URL as-is
+
+    out = {
+        "id":          str(vm.id),
+        "type":        "voice",
+        "sender":      "user",
+        "sender_role": vm.sender_role,
+        "sender_id":   vm.user_id,
+        "audio_url":   None if file_lost else audio_url,
+        "duration":    vm.duration,
+        "mode":        vm.mode,
+        "timestamp":   vm.timestamp.isoformat(),
+        "expires_at":  vm.expires_at.isoformat() if vm.expires_at else None,
+        "file_lost":   file_lost,
+    }
+    if current_user_id is not None:
+        out["isMine"] = str(vm.user_id) == str(current_user_id)
+    return out
+
+
+# ── Voice message upload ──────────────────────────────────────────────────────
+
+class VoiceMessageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import os, time
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+
+        user       = request.user
+        audio_file = request.FILES.get("audio")
+        mode       = request.data.get("mode", "calm")
+        duration   = float(request.data.get("duration", 0) or 0)
+        couple_id  = user.couple_id or str(user.id)
+
+        if not audio_file:
+            return Response({"error": "audio file is required"}, status=400)
+        if mode not in ["calm", "vent"]:
+            return Response({"error": "mode must be calm or vent"}, status=400)
+
+        cloudinary_public_id = None
+
+        if os.getenv("CLOUDINARY_URL", ""):
+            # ── Cloudinary (production) ───────────────────────────────────────
+            try:
+                import cloudinary.uploader
+                result = cloudinary.uploader.upload(
+                    audio_file,
+                    resource_type = "video",
+                    folder        = "solace/voice",
+                    public_id     = f"{couple_id}_{user.id}_{int(time.time())}",
+                    overwrite     = False,
+                )
+                audio_url            = result["secure_url"]
+                cloudinary_public_id = result["public_id"]
+            except Exception as e:
+                return Response({"error": f"Cloudinary upload failed: {e}"}, status=500)
+        else:
+            # ── Local disk (dev fallback) ──────────────────────────────────────────
+            media_root = getattr(settings, "MEDIA_ROOT", os.path.join(settings.BASE_DIR, "media"))
+            voice_dir  = os.path.join(media_root, "voice")
+            os.makedirs(voice_dir, exist_ok=True)
+            ext       = os.path.splitext(audio_file.name)[1] or ".webm"
+            filename  = f"{couple_id}_{user.id}_{int(time.time())}{ext}"
+            file_path = os.path.join(voice_dir, filename)
+            with open(file_path, "wb") as f:
+                for chunk in audio_file.chunks():
+                    f.write(chunk)
+            audio_url = f"{settings.MEDIA_URL}voice/{filename}"
+
+        # ── Persist to MongoDB ─────────────────────────────────────────────
+        vm = VoiceMessage(
+            couple_id            = couple_id,
+            user_id              = str(user.id),
+            sender_role          = user.role,
+            audio_url            = audio_url,
+            cloudinary_public_id = cloudinary_public_id,
+            duration             = duration,
+            mode                 = mode,
+        )
+        vm.save()
+
+        # HTTP response to the sender — isMine=True, full absolute URL
+        sender_payload = _serialize_voice_message(
+            vm, request=request, current_user_id=str(user.id)
+        )
+
+        # WS broadcast — relative URL + sender_id only, each client computes isMine
+        ws_payload = _serialize_voice_message(vm)  # no request → relative URL
+
+        # ── Broadcast to partner via WebSocket ────────────────────────────────
+        room = f"calm_{couple_id}" if mode == "calm" else f"vent_{couple_id}_{user.id}"
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                room,
+                {"type": "voice_message", **ws_payload},
+            )
+        except Exception as e:
+            print(f"WS broadcast error: {e}")
+
+        return Response(sender_payload, status=201)
+
+
+# ── Internal cleanup endpoint (called by GitHub Actions daily) ────────────────
+
+class InternalCleanupView(APIView):
+    """POST /api/internal/cleanup-voice — no user auth, protected by shared secret."""
+    permission_classes = []   # bypass JWT; secret checked manually below
+    authentication_classes = []
+
+    def post(self, request):
+        import os
+        from datetime import datetime
+
+        expected = os.getenv("CLEANUP_SECRET", "")
+        provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+
+        if not expected or provided != expected:
+            return Response({"error": "forbidden"}, status=403)
+
+        now     = datetime.utcnow()
+        expired = list(VoiceMessage.objects(expires_at__lte=now))
+        count   = len(expired)
+
+        use_cloudinary = bool(os.getenv("CLOUDINARY_URL", ""))
+
+        for vm in expired:
+            if use_cloudinary and vm.cloudinary_public_id:
+                try:
+                    import cloudinary.uploader
+                    cloudinary.uploader.destroy(vm.cloudinary_public_id, resource_type="video")
+                except Exception:
+                    pass
+            else:
+                try:
+                    file_path = os.path.join(settings.BASE_DIR, vm.audio_url.lstrip("/"))
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception:
+                    pass
+            vm.delete()
+
+        return Response({"deleted": count, "cutoff": now.isoformat()})

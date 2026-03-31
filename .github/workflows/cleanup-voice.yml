@@ -1,0 +1,19 @@
+name: Daily Voice Message Cleanup
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 2 AM UTC daily — safety net for inactive couples
+  workflow_dispatch:        # also runnable manually from GitHub UI
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping cleanup endpoint
+        run: |
+          curl -s -X POST https://solace-nam6.onrender.com/api/internal/cleanup-voice \
+            -H "Authorization: Bearer ${{ secrets.CLEANUP_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --fail \
+            --retry 3 \
+            --retry-delay 30
