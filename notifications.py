@@ -43,7 +43,7 @@ def _init_firebase():
 _init_firebase()
 
 
-def send_push_notification(fcm_token: str, title: str, body: str):
+def send_push_notification(fcm_token: str, title: str, body: str, extra_data: dict = None):
     if not firebase_admin._apps:
         print("Firebase not initialized — skipping notification")
         return None
@@ -67,11 +67,15 @@ def send_push_notification(fcm_token: str, title: str, body: str):
             if frontend:
                 print(f"FRONTEND_URL looks invalid, omitting webpush link: {frontend}")
 
+        # Use data-only payload for web so the service worker controls display.
+        # Keep native android/apns notifications for mobile apps.
+        data_payload = {"title": title, "body": body}
+        if extra_data:
+            # merge additional values like message_id
+            data_payload.update({k: str(v) for k, v in (extra_data or {}).items()})
+
         message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
+            data=data_payload,
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=messaging.AndroidNotification(
