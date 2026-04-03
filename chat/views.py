@@ -18,7 +18,7 @@ def _groq(prompt: str) -> str:
 
 
 def _serialize_message(m):
-    return {
+    out = {
         "id":          str(m.id),
         "type":        "text",
         "sender":      m.sender,
@@ -28,70 +28,97 @@ def _serialize_message(m):
         "mode":        m.mode,
         "timestamp":   m.timestamp.isoformat(),
     }
+    if getattr(m, "reply_to_id", None) and getattr(m, "reply_to_text", None):
+        out["reply_to"] = {
+            "id": m.reply_to_id,
+            "text": m.reply_to_text,
+            "sender_name": getattr(m, "reply_to_sender_name", None) or "",
+        }
+    return out
 
 
 class MessagesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        import os
-        from datetime import datetime
-        user      = request.user
-        mode      = request.query_params.get("mode")
+        user = request.user
+        mode = request.query_params.get("mode")
+        try:
+            limit = int(request.query_params.get("limit", 20))
+        except Exception:
+            limit = 20
+        try:
+            offset = int(request.query_params.get("offset", 0))
+        except Exception:
+            offset = 0
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
         couple_id = user.couple_id or str(user.id)
 
-        # ── Lazy deletion: silently purge expired voice messages on every load ─
-        try:
-            expired = VoiceMessage.objects(couple_id=couple_id, expires_at__lte=datetime.utcnow())
-            for vm in expired:
-                try:
-                    file_path = os.path.join(settings.BASE_DIR, vm.audio_url.lstrip("/"))
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                except Exception:
-                    pass
-            expired.delete()
-        except Exception:
-            pass  # never let cleanup crash the fetch
+        # Fetch only a bounded window from each collection, then merge in-memory.
+        # This keeps initial chat load fast (recent messages first).
+        take = offset + limit + 10
 
-        # ── Fetch text messages ─────────────────────────────────────────
-        qs = Message.objects(couple_id=couple_id)
+        text_qs = Message.objects(couple_id=couple_id)
         if mode == "vent":
-            qs = qs.filter(mode="vent", user_id=str(user.id))
+            text_qs = text_qs.filter(mode="vent", user_id=str(user.id))
         elif mode == "calm":
-            qs = qs.filter(mode="calm")
-        text_messages = [_serialize_message(m) for m in qs]
+            text_qs = text_qs.filter(mode="calm")
+        text_rows = list(text_qs.order_by("-timestamp").limit(take))
 
-        # ── Fetch voice messages (same mode filter) ────────────────────────
-        vqs = VoiceMessage.objects(couple_id=couple_id)
+        voice_qs = VoiceMessage.objects(couple_id=couple_id)
         if mode == "vent":
-            vqs = vqs.filter(mode="vent", user_id=str(user.id))
+            voice_qs = voice_qs.filter(mode="vent", user_id=str(user.id))
         elif mode == "calm":
-            vqs = vqs.filter(mode="calm")
-        voice_messages = [
-            _serialize_voice_message(vm, request=request, current_user_id=str(user.id))
-            for vm in vqs
-        ]
+            voice_qs = voice_qs.filter(mode="calm")
+        voice_rows = list(voice_qs.order_by("-timestamp").limit(take))
 
-        # ── Merge and sort by timestamp ──────────────────────────────────
-        all_messages = sorted(
-            text_messages + voice_messages,
-            key=lambda x: x["timestamp"],
-        )
+        merged = []
+        for m in text_rows:
+            merged.append(_serialize_message(m))
+        for vm in voice_rows:
+            merged.append(_serialize_voice_message(vm, request=request, current_user_id=str(user.id)))
 
-        return Response({"messages": all_messages})
+        merged.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+        page_desc = merged[offset: offset + limit]
+        has_more = len(merged) > (offset + limit)
+        paged = list(reversed(page_desc))
+        return Response({"messages": paged, "has_more": has_more})
 
 
     def post(self, request):
         user = request.user
         text = request.data.get("text", "").strip()
         mode = request.data.get("mode", "calm")
+        reply_to = request.data.get("reply_to")
         if not text:
             return Response({"error": "text is required"}, status=400)
         if mode not in ["calm", "vent"]:
             return Response({"error": "mode must be calm or vent"}, status=400)
         couple_id = user.couple_id or str(user.id)
-        msg = Message(couple_id=couple_id, user_id=str(user.id), sender="user", sender_role=user.role, text=text, mode=mode)      
+
+        reply_kwargs = {}
+        if mode == "calm" and isinstance(reply_to, dict):
+            reply_id = str(reply_to.get("id") or "").strip()
+            reply_text = str(reply_to.get("text") or "").strip()
+            reply_sender = str(reply_to.get("sender_name") or "").strip()
+            if reply_id and reply_text:
+                reply_kwargs = {
+                    "reply_to_id": reply_id,
+                    "reply_to_text": reply_text[:240],
+                    "reply_to_sender_name": reply_sender[:60],
+                }
+
+        msg = Message(
+            couple_id=couple_id,
+            user_id=str(user.id),
+            sender="user",
+            sender_role=user.role,
+            text=text,
+            mode=mode,
+            **reply_kwargs,
+        )
         msg.save()
         return Response(_serialize_message(msg), status=201)
 
@@ -337,33 +364,28 @@ class VoiceMessageView(APIView):
 
         cloudinary_public_id = None
 
-        if os.getenv("CLOUDINARY_URL", ""):
-            # ── Cloudinary (production) ───────────────────────────────────────
-            try:
-                import cloudinary.uploader
-                result = cloudinary.uploader.upload(
-                    audio_file,
-                    resource_type = "video",
-                    folder        = "solace/voice",
-                    public_id     = f"{couple_id}_{user.id}_{int(time.time())}",
-                    overwrite     = False,
-                )
-                audio_url            = result["secure_url"]
-                cloudinary_public_id = result["public_id"]
-            except Exception as e:
-                return Response({"error": f"Cloudinary upload failed: {e}"}, status=500)
-        else:
-            # ── Local disk (dev fallback) ──────────────────────────────────────────
-            media_root = getattr(settings, "MEDIA_ROOT", os.path.join(settings.BASE_DIR, "media"))
-            voice_dir  = os.path.join(media_root, "voice")
-            os.makedirs(voice_dir, exist_ok=True)
-            ext       = os.path.splitext(audio_file.name)[1] or ".webm"
-            filename  = f"{couple_id}_{user.id}_{int(time.time())}{ext}"
-            file_path = os.path.join(voice_dir, filename)
-            with open(file_path, "wb") as f:
-                for chunk in audio_file.chunks():
-                    f.write(chunk)
-            audio_url = f"{settings.MEDIA_URL}voice/{filename}"
+        use_cloudinary = bool(os.getenv("CLOUDINARY_URL", ""))
+        if not use_cloudinary:
+            return Response({"error": "CLOUDINARY_URL is not configured"}, status=500)
+
+        try:
+            import cloudinary.uploader as cloudinary_uploader
+        except Exception as e:
+            return Response({"error": f"Cloudinary SDK not available: {e}"}, status=500)
+
+        # ── Cloudinary-only upload path ───────────────────────────────────────
+        try:
+            result = cloudinary_uploader.upload(
+                audio_file,
+                resource_type = "video",
+                folder        = "solace/voice",
+                public_id     = f"{couple_id}_{user.id}_{int(time.time())}",
+                overwrite     = False,
+            )
+            audio_url            = result["secure_url"]
+            cloudinary_public_id = result["public_id"]
+        except Exception as e:
+            return Response({"error": f"Cloudinary upload failed: {e}"}, status=500)
 
         # ── Persist to MongoDB ─────────────────────────────────────────────
         vm = VoiceMessage(
@@ -396,7 +418,39 @@ class VoiceMessageView(APIView):
         except Exception as e:
             print(f"WS broadcast error: {e}")
 
+        # ── Push notification to partner ──────────────────────────────────────
+        try:
+            from auth_app.models import User as AuthUser
+            from notifications import send_push_notification
+
+            print(f"[VoiceNotif] Looking for partner with couple_id={couple_id}, sender={str(user.id)}")
+
+            # Direct lookup: find the other user who shares the same couple_id
+            # This avoids a brittle CoupleLink lookup and works as long as both
+            # users have couple_id set (which is guaranteed if they're linked).
+            partner = AuthUser.objects(
+                couple_id=couple_id,
+                id__ne=user.id,
+            ).first()
+
+            print(f"[VoiceNotif] Partner found: {partner.id if partner else None}, fcm_token={'yes' if (partner and partner.fcm_token) else 'no/empty'}")
+
+            if partner and partner.fcm_token:
+                sender_name = (user.nickname or user.name or "Your partner").strip()
+                result = send_push_notification(
+                    partner.fcm_token,
+                    title=f"{sender_name} 🎙️",
+                    body="Sent you a voice message",
+                    extra_data={"message_id": str(vm.id)},
+                )
+                print(f"[VoiceNotif] send_push_notification result: {result}")
+        except Exception as e:
+            import traceback
+            print(f"[VoiceNotif] ERROR: {e}")
+            print(traceback.format_exc())
+
         return Response(sender_payload, status=201)
+
 
 
 # ── Internal cleanup endpoint (called by GitHub Actions daily) ────────────────
@@ -421,12 +475,17 @@ class InternalCleanupView(APIView):
         count   = len(expired)
 
         use_cloudinary = bool(os.getenv("CLOUDINARY_URL", ""))
+        cloudinary_uploader = None
+        if use_cloudinary:
+            try:
+                import cloudinary.uploader as cloudinary_uploader
+            except Exception:
+                use_cloudinary = False
 
         for vm in expired:
             if use_cloudinary and vm.cloudinary_public_id:
                 try:
-                    import cloudinary.uploader
-                    cloudinary.uploader.destroy(vm.cloudinary_public_id, resource_type="video")
+                    cloudinary_uploader.destroy(vm.cloudinary_public_id, resource_type="video")
                 except Exception:
                     pass
             else:

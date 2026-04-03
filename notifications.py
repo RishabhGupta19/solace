@@ -40,12 +40,15 @@ def _init_firebase():
     return False
 
 
-_init_firebase()
 
 
 def send_push_notification(fcm_token: str, title: str, body: str, extra_data: dict = None):
+    # Lazy init: retry Firebase setup on every call if not yet initialized.
+    # This avoids the race where this module is imported before load_dotenv().
     if not firebase_admin._apps:
-        print("Firebase not initialized — skipping notification")
+        _init_firebase()
+    if not firebase_admin._apps:
+        print("Firebase not initialized after retry — skipping notification")
         return None
     try:
         # Build webpush config with safe validation of FRONTEND_URL
