@@ -3,7 +3,6 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import os
 import json
-from urllib.parse import urlparse
 
 
 def _init_firebase():
@@ -51,56 +50,35 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
         print("Firebase not initialized after retry — skipping notification")
         return None
     try:
-        # Build webpush config with safe validation of FRONTEND_URL
-        frontend = os.getenv('FRONTEND_URL', '').strip()
-        parsed = urlparse(frontend) if frontend else None
-        icon_url = '/icon-192.png'
-        webpush_kwargs = {}
+        frontend_url = os.getenv("FRONTEND_URL", "https://two-hearts-chat.vercel.app").rstrip("/")
+        chat_url = f"{frontend_url}/#/chat"
 
-        if parsed and parsed.scheme and parsed.netloc:
-            # Use full icon URL only when frontend is a valid absolute URL
-            icon_url = f"{frontend.rstrip('/')}/icon-192.png"
-            # Only include fcm_options.link when it's HTTPS
-            if parsed.scheme.lower() == 'https':
-                webpush_kwargs['fcm_options'] = messaging.WebpushFCMOptions(link=frontend)
-                print(f"Using secure FRONTEND_URL for webpush link: {frontend}")
-            else:
-                print(f"FRONTEND_URL is not HTTPS, omitting webpush link: {frontend}")
-        else:
-            if frontend:
-                print(f"FRONTEND_URL looks invalid, omitting webpush link: {frontend}")
-
-        # Use data-only payload for web so the service worker controls display.
-        # Keep native android/apns notifications for mobile apps.
-        data_payload = {"title": title, "body": body}
+        data = {"url": chat_url}
         if extra_data:
-            # merge additional values like message_id
-            data_payload.update({k: str(v) for k, v in (extra_data or {}).items()})
+            data.update({str(k): str(v) for k, v in extra_data.items()})
 
         message = messaging.Message(
-            data=data_payload,
+            notification=messaging.Notification(title=title, body=body),
+            data=data,
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=messaging.AndroidNotification(
                     title=title,
                     body=body,
                     sound="default",
+                    click_action="FLUTTER_NOTIFICATION_CLICK",
                 ),
             ),
-            apns=messaging.APNSConfig(
-                headers={"apns-priority": "10"},
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        alert=messaging.ApsAlert(title=title, body=body),
-                        sound="default",
-                    )
-                ),
-            ),
-            # For web, send only data and optional fcm_options; do not include a
-            # webpush Notification object so the browser doesn't auto-display
-            # a notification (we let the service worker control display).
             webpush=messaging.WebpushConfig(
-                **webpush_kwargs,
+                notification=messaging.WebpushNotification(
+                    title=title,
+                    body=body,
+                    icon=f"{frontend_url}/icon-192.png",
+                    data={"url": chat_url},
+                ),
+                fcm_options=messaging.WebpushFCMOptions(
+                    link=chat_url
+                ) if frontend_url.startswith("https://") else None,
             ),
             token=fcm_token,
         )

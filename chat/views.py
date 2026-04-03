@@ -4,8 +4,21 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Message, VoiceMessage
+import os
+
+
+_cloudinary_uploader = None
 
 client = Groq(api_key=settings.GROQ_KEY)
+
+
+def _get_cloudinary_uploader():
+    global _cloudinary_uploader
+    if _cloudinary_uploader is not None:
+        return _cloudinary_uploader
+    import cloudinary.uploader as cloudinary_uploader
+    _cloudinary_uploader = cloudinary_uploader
+    return _cloudinary_uploader
 
 
 def _groq(prompt: str) -> str:
@@ -347,7 +360,6 @@ class VoiceMessageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        import os, time
         from asgiref.sync import async_to_sync
         from channels.layers import get_channel_layer
 
@@ -369,7 +381,7 @@ class VoiceMessageView(APIView):
             return Response({"error": "CLOUDINARY_URL is not configured"}, status=500)
 
         try:
-            import cloudinary.uploader as cloudinary_uploader
+            cloudinary_uploader = _get_cloudinary_uploader()
         except Exception as e:
             return Response({"error": f"Cloudinary SDK not available: {e}"}, status=500)
 
@@ -377,10 +389,11 @@ class VoiceMessageView(APIView):
         try:
             result = cloudinary_uploader.upload(
                 audio_file,
-                resource_type = "video",
+                resource_type = "auto",
                 folder        = "solace/voice",
-                public_id     = f"{couple_id}_{user.id}_{int(time.time())}",
                 overwrite     = False,
+                use_filename  = False,
+                unique_filename = True,
             )
             audio_url            = result["secure_url"]
             cloudinary_public_id = result["public_id"]
@@ -418,39 +431,7 @@ class VoiceMessageView(APIView):
         except Exception as e:
             print(f"WS broadcast error: {e}")
 
-        # ── Push notification to partner ──────────────────────────────────────
-        try:
-            from auth_app.models import User as AuthUser
-            from notifications import send_push_notification
-
-            print(f"[VoiceNotif] Looking for partner with couple_id={couple_id}, sender={str(user.id)}")
-
-            # Direct lookup: find the other user who shares the same couple_id
-            # This avoids a brittle CoupleLink lookup and works as long as both
-            # users have couple_id set (which is guaranteed if they're linked).
-            partner = AuthUser.objects(
-                couple_id=couple_id,
-                id__ne=user.id,
-            ).first()
-
-            print(f"[VoiceNotif] Partner found: {partner.id if partner else None}, fcm_token={'yes' if (partner and partner.fcm_token) else 'no/empty'}")
-
-            if partner and partner.fcm_token:
-                sender_name = (user.nickname or user.name or "Your partner").strip()
-                result = send_push_notification(
-                    partner.fcm_token,
-                    title=f"{sender_name} 🎙️",
-                    body="Sent you a voice message",
-                    extra_data={"message_id": str(vm.id)},
-                )
-                print(f"[VoiceNotif] send_push_notification result: {result}")
-        except Exception as e:
-            import traceback
-            print(f"[VoiceNotif] ERROR: {e}")
-            print(traceback.format_exc())
-
         return Response(sender_payload, status=201)
-
 
 
 # ── Internal cleanup endpoint (called by GitHub Actions daily) ────────────────
