@@ -4,6 +4,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Message, VoiceMessage
+from couples.models import CoupleLink
+from auth_app.models import User
+from notifications import send_push_notification
 import os
 
 
@@ -411,6 +414,30 @@ class VoiceMessageView(APIView):
             mode                 = mode,
         )
         vm.save()
+
+        # Push notification for partner (calm mode), guarded by idempotent claim.
+        try:
+            if mode == "calm" and user.couple_id:
+                link = CoupleLink.objects.get(id=user.couple_id)
+                partner_id = link.partner_id if link.creator_id == str(user.id) else link.creator_id
+                if partner_id:
+                    partner = User.objects.get(id=partner_id)
+                    if partner.fcm_token:
+                        notification_key = f"voice:{str(vm.id)}"
+                        claimed = User.objects(
+                            id=partner_id,
+                            last_notified_message_id__ne=notification_key,
+                        ).update_one(set__last_notified_message_id=notification_key)
+
+                        if claimed:
+                            send_push_notification(
+                                partner.fcm_token,
+                                title="New voice message 🎤",
+                                body=f"{user.name or 'Your partner'} sent a voice message",
+                                extra_data={"message_id": notification_key},
+                            )
+        except Exception as e:
+            print(f"Voice push notification error: {e}")
 
         # HTTP response to the sender — isMine=True, full absolute URL
         sender_payload = _serialize_voice_message(
