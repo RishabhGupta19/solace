@@ -20,6 +20,7 @@ class User(me.Document):
     nickname = me.StringField(default="")
     onboarding_complete = me.BooleanField(default=False)
     fcm_token = me.StringField(default="")
+    last_notified_message_id = me.StringField(default="")
     role = me.StringField(choices=["gf", "bf"], default=None)
     couple_id = me.StringField(default=None)
     partner_name = me.StringField(default=None)
@@ -28,7 +29,9 @@ class User(me.Document):
     assessment_profile = me.EmbeddedDocumentField(AssessmentProfile, default=AssessmentProfile)
     created_at = me.DateTimeField(default=datetime.utcnow)
 
-    meta = {"collection": "users"}
+    # Keep schema tolerant for rolling deployments where some documents may
+    # already contain newly introduced fields.
+    meta = {"collection": "users", "strict": False}
 
     @property
     def is_authenticated(self):
