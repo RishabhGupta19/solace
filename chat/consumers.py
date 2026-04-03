@@ -53,12 +53,22 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         # Regular text message
         text = data.get("text", "").strip()
         sender_name = data.get("sender_name", "")
+        client_temp_id = data.get("client_temp_id") or data.get("tempId")
+        reply_to = data.get("reply_to") if isinstance(data.get("reply_to"), dict) else None
 
         if not text:
             return
 
         sender_role = self.user_role or data.get("sender_role", "")
-        message = await self.save_message(text, sender_role)
+        message = await self.save_message(text, sender_role, reply_to)
+
+        reply_payload = None
+        if getattr(message, "reply_to_id", None) and getattr(message, "reply_to_text", None):
+            reply_payload = {
+                "id": message.reply_to_id,
+                "text": message.reply_to_text,
+                "sender_name": getattr(message, "reply_to_sender_name", "") or "",
+            }
 
         await self.channel_layer.group_send(
             self.room_group_name,
@@ -71,6 +81,8 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
                 "sender_id":   self.user_id,
                 "sender_name": sender_name,
                 "timestamp":   message.timestamp.isoformat(),
+                "client_temp_id": client_temp_id,
+                "reply_to": reply_payload,
             }
         )
 
@@ -85,6 +97,8 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             "sender_id":   event.get("sender_id", ""),
             "sender_name": event["sender_name"],
             "timestamp":   event["timestamp"],
+            "client_temp_id": event.get("client_temp_id"),
+            "reply_to": event.get("reply_to"),
         }))
 
     async def voice_message(self, event):
@@ -123,14 +137,6 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             "sender_name": event.get("sender_name", ""),
             "timestamp": event.get("timestamp", ""),
         }))
-    async def connect(self):
-        self.couple_id = self.scope["url_route"]["kwargs"]["couple_id"]
-        self.room_group_name = f"calm_{self.couple_id}"
-        self.user_role = await self.get_role_from_token()
-        self.user_id = await self.get_user_id_from_token()  # ← add this
-        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-        await self.accept()
-        
     async def typing_indicator(self, event):
         # Only forward to other connections, not the sender
         if event.get("channel") != self.channel_name:
@@ -176,8 +182,20 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         ).update(seen=True, seen_at=datetime.utcnow())
 
     @database_sync_to_async
-    def save_message(self, text, sender_role):
+    def save_message(self, text, sender_role, reply_to=None):
         from chat.models import Message
+        reply_kwargs = {}
+        if isinstance(reply_to, dict):
+            reply_id = str(reply_to.get("id") or "").strip()
+            reply_text = str(reply_to.get("text") or "").strip()
+            reply_sender = str(reply_to.get("sender_name") or "").strip()
+            if reply_id and reply_text:
+                reply_kwargs = {
+                    "reply_to_id": reply_id,
+                    "reply_to_text": reply_text[:240],
+                    "reply_to_sender_name": reply_sender[:60],
+                }
+
         msg = Message(
             couple_id   = self.couple_id,
             user_id     = self.user_id,
@@ -185,6 +203,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             sender_role = sender_role,
             text        = text,
             mode        = "calm",
+            **reply_kwargs,
         )
         msg.save()
         try:

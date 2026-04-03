@@ -10,6 +10,9 @@ class Message(me.Document):
     seen        = me.BooleanField(default=False)
     seen_at     = me.DateTimeField(default=None)
     text        = me.StringField(required=True)
+    reply_to_id = me.StringField(default=None)
+    reply_to_text = me.StringField(default=None)
+    reply_to_sender_name = me.StringField(default=None)
     mode        = me.StringField(choices=["calm", "vent"], required=True)
     timestamp   = me.DateTimeField(default=datetime.utcnow)
 
