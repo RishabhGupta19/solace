@@ -3,6 +3,7 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import os
 import json
+import uuid
 
 
 def _init_firebase():
@@ -52,13 +53,19 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
     try:
         frontend_url = os.getenv("FRONTEND_URL", "https://two-hearts-chat.vercel.app").rstrip("/")
         chat_url = f"{frontend_url}/#/chat"
+        notification_id = str((extra_data or {}).get("message_id") or uuid.uuid4())
 
-        data = {"url": chat_url}
+        # Data-only payload for web prevents browser + service worker double-display.
+        data = {
+            "url": chat_url,
+            "title": str(title or "New message"),
+            "body": str(body or ""),
+            "notification_id": notification_id,
+        }
         if extra_data:
             data.update({str(k): str(v) for k, v in extra_data.items()})
 
         message = messaging.Message(
-            notification=messaging.Notification(title=title, body=body),
             data=data,
             android=messaging.AndroidConfig(
                 priority="high",
@@ -70,12 +77,10 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
                 ),
             ),
             webpush=messaging.WebpushConfig(
-                notification=messaging.WebpushNotification(
-                    title=title,
-                    body=body,
-                    icon=f"{frontend_url}/icon-192.png",
-                    data={"url": chat_url},
-                ),
+                headers={
+                    # Collapse retries for same logical notification.
+                    "Topic": notification_id,
+                },
                 fcm_options=messaging.WebpushFCMOptions(
                     link=chat_url
                 ) if frontend_url.startswith("https://") else None,

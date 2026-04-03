@@ -212,12 +212,20 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             if partner_id:
                 partner = User.objects.get(id=partner_id)
                 if partner.fcm_token:
-                    send_push_notification(
-                        partner.fcm_token,
-                        title="New message 💬",
-                        body=text[:50],
-                        extra_data={"message_id": str(msg.id)},
-                    )
+                    message_id = str(msg.id)
+                    claimed = User.objects(
+                        id=partner_id,
+                        last_notified_message_id__ne=message_id,
+                    ).update_one(set__last_notified_message_id=message_id)
+
+                    # Send only once per message id, even if this path executes twice.
+                    if claimed:
+                        send_push_notification(
+                            partner.fcm_token,
+                            title="New message 💬",
+                            body=text[:50],
+                            extra_data={"message_id": message_id},
+                        )
         except Exception as e:
             print(f"Notification error: {e}")
         return msg
