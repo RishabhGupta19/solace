@@ -1,12 +1,14 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
 from .models import User
 from couples.models import CoupleLink
 from .utils import hash_password, check_password, generate_tokens, decode_token
 import jwt
 import random
 import string
+import cloudinary.uploader
 
 
 def _generate_code():
@@ -63,6 +65,12 @@ def _serialize_user(user):
             "traits": getattr(profile, "traits", []),
         } if user.assessment_completed and profile else None,
         "created_at": user.created_at.isoformat(),
+        # profile picture convenience fields
+        "profile_picture_url": (user.profilePic.get('url') if getattr(user, 'profilePic', None) else None),
+        "profile_picture_public_id": (user.profilePic.get('public_id') if getattr(user, 'profilePic', None) else None),
+        # partner profile picture (if linked and partner exists)
+        "partner_profile_picture_url": (partner.profilePic.get('url') if 'partner' in locals() and getattr(partner, 'profilePic', None) else None),
+        "partner_profile_picture_public_id": (partner.profilePic.get('public_id') if 'partner' in locals() and getattr(partner, 'profilePic', None) else None),
     }
     
 # New endpoint to save FCM token
@@ -177,3 +185,57 @@ class SetRoleView(APIView):
         user.role = role
         user.save()
         return Response({"user": _serialize_user(user)})
+
+
+class UploadProfilePicView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        # Expect multipart form with key 'image'
+        file = request.FILES.get('image') or request.FILES.get('file')
+        if not file:
+            return Response({"error": "No file provided"}, status=400)
+
+        # Validate file type
+        allowed = ("image/jpeg", "image/jpg", "image/png", "image/webp")
+        if file.content_type not in allowed:
+            return Response({"error": "Invalid file type"}, status=400)
+
+        # Validate file size (2MB)
+        max_size = 2 * 1024 * 1024
+        if file.size > max_size:
+            return Response({"error": "File too large (max 2MB)"}, status=400)
+
+        user = request.user
+        try:
+            # If existing picture, remove it from Cloudinary
+            existing = getattr(user, 'profilePic', {}) or {}
+            public_id = existing.get('public_id')
+            if public_id:
+                try:
+                    cloudinary.uploader.destroy(public_id)
+                except Exception:
+                    # non-fatal
+                    pass
+
+            # Construct a user-based public_id to keep predictable mapping
+            unique_id = f"profile_pictures/{str(user.id)}_{int(__import__('time').time())}"
+
+            upload_result = cloudinary.uploader.upload(
+                file,
+                public_id=unique_id,
+                folder="profile_pictures",
+                overwrite=True,
+                transformation=[{"width": 300, "height": 300, "crop": "fill", "gravity": "face"}],
+            )
+
+            url = upload_result.get('secure_url') or upload_result.get('url')
+            new_public_id = upload_result.get('public_id')
+
+            user.profilePic = {"url": url, "public_id": new_public_id}
+            user.save()
+
+            return Response({"user": _serialize_user(user)})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)

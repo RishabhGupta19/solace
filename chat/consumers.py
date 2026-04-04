@@ -70,6 +70,13 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
                 "sender_name": getattr(message, "reply_to_sender_name", "") or "",
             }
 
+        reply_to_camel = None
+        if getattr(message, "reply_to_message_id", None) and getattr(message, "reply_to_text", None):
+            reply_to_camel = {
+                "messageId": message.reply_to_message_id,
+                "text": message.reply_to_text,
+            }
+
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -83,6 +90,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
                 "timestamp":   message.timestamp.isoformat(),
                 "client_temp_id": client_temp_id,
                 "reply_to": reply_payload,
+                "replyTo": reply_to_camel,
             }
         )
 
@@ -99,6 +107,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             "timestamp":   event["timestamp"],
             "client_temp_id": event.get("client_temp_id"),
             "reply_to": event.get("reply_to"),
+            "replyTo": event.get("replyTo"),
         }))
 
     async def voice_message(self, event):
@@ -186,11 +195,12 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         from chat.models import Message
         reply_kwargs = {}
         if isinstance(reply_to, dict):
-            reply_id = str(reply_to.get("id") or "").strip()
+            reply_id = str(reply_to.get("id") or reply_to.get("messageId") or "").strip()
             reply_text = str(reply_to.get("text") or "").strip()
             reply_sender = str(reply_to.get("sender_name") or "").strip()
             if reply_id and reply_text:
                 reply_kwargs = {
+                    "reply_to_message_id": reply_id,
                     "reply_to_id": reply_id,
                     "reply_to_text": reply_text[:240],
                     "reply_to_sender_name": reply_sender[:60],
