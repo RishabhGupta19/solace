@@ -27,6 +27,8 @@ class User(me.Document):
     is_linked = me.BooleanField(default=False)
     assessment_completed = me.BooleanField(default=False)
     assessment_profile = me.EmbeddedDocumentField(AssessmentProfile, default=AssessmentProfile)
+    # Profile picture stored on Cloudinary: {'url': str, 'public_id': str}
+    profilePic = me.DictField(default=dict)
     created_at = me.DateTimeField(default=datetime.utcnow)
 
     # Keep schema tolerant for rolling deployments where some documents may

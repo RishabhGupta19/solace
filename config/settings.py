@@ -3,6 +3,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 import mongoengine
 load_dotenv()
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -95,3 +98,15 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_TZ = True
+
+# Cloudinary configuration (reads from environment)
+CLOUDINARY_CLOUD_NAME = os.getenv('CLOUD_NAME')
+CLOUDINARY_API_KEY = os.getenv('API_KEY')
+CLOUDINARY_API_SECRET = os.getenv('API_SECRET')
+if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=CLOUDINARY_API_KEY,
+        api_secret=CLOUDINARY_API_SECRET,
+        secure=True,
+    )

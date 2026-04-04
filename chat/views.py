@@ -7,6 +7,9 @@ from .models import Message, VoiceMessage
 from couples.models import CoupleLink
 from auth_app.models import User
 from notifications import send_push_notification
+from django.utils.dateparse import parse_datetime
+from django.utils import timezone
+from datetime import timezone as dt_timezone
 import os
 
 
@@ -34,13 +37,16 @@ def _groq(prompt: str) -> str:
 
 
 def _serialize_message(m):
+    is_deleted = bool(getattr(m, "is_deleted", False))
     out = {
         "id":          str(m.id),
         "type":        "text",
         "sender":      m.sender,
         "sender_role": m.sender_role,
         "sender_id":   m.user_id or "",
-        "text":        m.text,
+        "text":        "This message was deleted" if is_deleted else m.text,
+        "is_deleted":  is_deleted,
+        "deleted_at":  m.deleted_at.isoformat() if getattr(m, "deleted_at", None) else None,
         "mode":        m.mode,
         "timestamp":   m.timestamp.isoformat(),
     }
@@ -49,6 +55,11 @@ def _serialize_message(m):
             "id": m.reply_to_id,
             "text": m.reply_to_text,
             "sender_name": getattr(m, "reply_to_sender_name", None) or "",
+        }
+    if getattr(m, "reply_to_message_id", None) and getattr(m, "reply_to_text", None):
+        out["replyTo"] = {
+            "messageId": m.reply_to_message_id,
+            "text": m.reply_to_text,
         }
     return out
 
@@ -63,23 +74,32 @@ class MessagesView(APIView):
             limit = int(request.query_params.get("limit", 20))
         except Exception:
             limit = 20
-        try:
-            offset = int(request.query_params.get("offset", 0))
-        except Exception:
-            offset = 0
         limit = max(1, min(limit, 100))
-        offset = max(0, offset)
-        couple_id = user.couple_id or str(user.id)
+        from datetime import datetime
 
-        # Fetch only a bounded window from each collection, then merge in-memory.
-        # This keeps initial chat load fast (recent messages first).
-        take = offset + limit + 10
+        before = request.query_params.get("before")
+        couple_id = user.couple_id or str(user.id)
+        now = datetime.utcnow()
+
+        before_dt = None
+        if before:
+            parsed = parse_datetime(before)
+            if parsed is not None:
+                if timezone.is_naive(parsed):
+                    parsed = timezone.make_aware(parsed, dt_timezone.utc)
+                before_dt = parsed
+
+        # Fetch a bounded window from each collection and merge by timestamp.
+        # Cursor-based pagination avoids large offset scans as history grows.
+        take = limit + 10
 
         text_qs = Message.objects(couple_id=couple_id)
         if mode == "vent":
             text_qs = text_qs.filter(mode="vent", user_id=str(user.id))
         elif mode == "calm":
             text_qs = text_qs.filter(mode="calm")
+        if before_dt is not None:
+            text_qs = text_qs.filter(timestamp__lt=before_dt)
         text_rows = list(text_qs.order_by("-timestamp").limit(take))
 
         voice_qs = VoiceMessage.objects(couple_id=couple_id)
@@ -87,6 +107,10 @@ class MessagesView(APIView):
             voice_qs = voice_qs.filter(mode="vent", user_id=str(user.id))
         elif mode == "calm":
             voice_qs = voice_qs.filter(mode="calm")
+        # Never return expired voice messages to clients, even if cleanup job lags.
+        voice_qs = voice_qs.filter(expires_at__gt=now)
+        if before_dt is not None:
+            voice_qs = voice_qs.filter(timestamp__lt=before_dt)
         voice_rows = list(voice_qs.order_by("-timestamp").limit(take))
 
         merged = []
@@ -97,10 +121,11 @@ class MessagesView(APIView):
 
         merged.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
-        page_desc = merged[offset: offset + limit]
-        has_more = len(merged) > (offset + limit)
+        page_desc = merged[:limit]
+        has_more = len(merged) > limit
         paged = list(reversed(page_desc))
-        return Response({"messages": paged, "has_more": has_more})
+        oldest_timestamp = paged[0].get("timestamp") if paged else None
+        return Response({"messages": paged, "has_more": has_more, "oldest_timestamp": oldest_timestamp})
 
 
     def post(self, request):
@@ -108,6 +133,7 @@ class MessagesView(APIView):
         text = request.data.get("text", "").strip()
         mode = request.data.get("mode", "calm")
         reply_to = request.data.get("reply_to")
+        reply_to_camel = request.data.get("replyTo")
         if not text:
             return Response({"error": "text is required"}, status=400)
         if mode not in ["calm", "vent"]:
@@ -115,12 +141,14 @@ class MessagesView(APIView):
         couple_id = user.couple_id or str(user.id)
 
         reply_kwargs = {}
-        if mode == "calm" and isinstance(reply_to, dict):
-            reply_id = str(reply_to.get("id") or "").strip()
-            reply_text = str(reply_to.get("text") or "").strip()
-            reply_sender = str(reply_to.get("sender_name") or "").strip()
+        reply_payload = reply_to if isinstance(reply_to, dict) else reply_to_camel if isinstance(reply_to_camel, dict) else None
+        if mode == "calm" and isinstance(reply_payload, dict):
+            reply_id = str(reply_payload.get("id") or reply_payload.get("messageId") or "").strip()
+            reply_text = str(reply_payload.get("text") or "").strip()
+            reply_sender = str(reply_payload.get("sender_name") or "").strip()
             if reply_id and reply_text:
                 reply_kwargs = {
+                    "reply_to_message_id": reply_id,
                     "reply_to_id": reply_id,
                     "reply_to_text": reply_text[:240],
                     "reply_to_sender_name": reply_sender[:60],
@@ -137,6 +165,125 @@ class MessagesView(APIView):
         )
         msg.save()
         return Response(_serialize_message(msg), status=201)
+
+
+class MessageDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, message_id):
+        from datetime import datetime, timedelta
+
+        user = request.user
+        couple_id = user.couple_id or str(user.id)
+        msg = Message.objects(id=message_id, couple_id=couple_id).first()
+        if not msg:
+            return Response({"error": "message not found"}, status=404)
+
+        if str(msg.user_id or "") != str(user.id):
+            return Response({"error": "forbidden"}, status=403)
+
+        if msg.mode != "calm":
+            return Response({"error": "delete is only allowed in calm mode"}, status=400)
+
+        if msg.is_deleted:
+            return Response(_serialize_message(msg), status=200)
+
+        age = datetime.utcnow() - msg.timestamp
+        if age > timedelta(hours=24):
+            return Response({"error": "delete window expired"}, status=400)
+
+        msg.is_deleted = True
+        msg.deleted_at = datetime.utcnow()
+        msg.text = "This message was deleted"
+        msg.save()
+
+        return Response(_serialize_message(msg), status=200)
+
+
+class MessageSearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        couple_id = user.couple_id or str(user.id)
+        chat_id = request.query_params.get("chatId")
+        mode = request.query_params.get("mode")
+        query = (request.query_params.get("query") or "").strip()
+        try:
+            limit = int(request.query_params.get("limit", 30))
+        except Exception:
+            limit = 30
+        limit = max(1, min(limit, 100))
+
+        # Prevent searching other chats; fallback to current chat when omitted.
+        if chat_id and str(chat_id) != str(couple_id):
+            return Response({"results": []}, status=200)
+
+        if not query:
+            return Response({"results": []}, status=200)
+
+        if mode != "calm":
+            return Response({"results": []}, status=200)
+
+        qs = Message.objects(couple_id=couple_id, text__icontains=query)
+        qs = qs.filter(mode="calm")
+
+        rows = list(qs.order_by("-timestamp").limit(limit))
+        rows.reverse()
+        return Response({"results": [_serialize_message(m) for m in rows]})
+
+
+class MessageContextView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        couple_id = user.couple_id or str(user.id)
+        message_id = (request.query_params.get("messageId") or "").strip()
+        mode = request.query_params.get("mode")
+        try:
+            window = int(request.query_params.get("window", 6))
+        except Exception:
+            window = 6
+        window = max(1, min(window, 20))
+
+        if mode != "calm" or not message_id:
+            return Response({"messages": [], "target_id": None})
+
+        target = Message.objects(id=message_id, couple_id=couple_id, mode="calm").first()
+        if not target:
+            return Response({"messages": [], "target_id": None})
+
+        prev_rows = list(
+            Message.objects(
+                couple_id=couple_id,
+                mode="calm",
+                timestamp__lt=target.timestamp,
+            ).order_by("-timestamp").limit(window)
+        )
+        prev_rows.reverse()
+
+        next_rows = list(
+            Message.objects(
+                couple_id=couple_id,
+                mode="calm",
+                timestamp__gt=target.timestamp,
+            ).order_by("timestamp").limit(window)
+        )
+
+        rows = [*prev_rows, target, *next_rows]
+
+        # Deduplicate by id in rare same-timestamp edge cases.
+        out = []
+        seen = set()
+        for msg in rows:
+            key = str(msg.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(_serialize_message(msg))
+
+        return Response({"messages": out, "target_id": str(target.id)})
 
 
 class AIRespondView(APIView):

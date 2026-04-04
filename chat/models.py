@@ -10,6 +10,9 @@ class Message(me.Document):
     seen        = me.BooleanField(default=False)
     seen_at     = me.DateTimeField(default=None)
     text        = me.StringField(required=True)
+    is_deleted  = me.BooleanField(default=False)
+    deleted_at  = me.DateTimeField(default=None)
+    reply_to_message_id = me.StringField(default=None)
     reply_to_id = me.StringField(default=None)
     reply_to_text = me.StringField(default=None)
     reply_to_sender_name = me.StringField(default=None)
@@ -35,4 +38,10 @@ class VoiceMessage(me.Document):
             self.expires_at = datetime.utcnow() + timedelta(hours=24)
         return super().save(*args, **kwargs)
 
-    meta = {"collection": "voice_messages", "ordering": ["timestamp"], "strict": False}
+    meta = {
+        "collection": "voice_messages",
+        "ordering": ["timestamp"],
+        "strict": False,
+        # Mongo TTL index for safety: documents expire automatically at expires_at.
+        "indexes": [{"fields": ["expires_at"], "expireAfterSeconds": 0}],
+    }
