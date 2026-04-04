@@ -60,7 +60,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             return
 
         sender_role = self.user_role or data.get("sender_role", "")
-        message = await self.save_message(text, sender_role, reply_to)
+        message = await self.save_message(text, sender_role, reply_to, client_temp_id)
 
         reply_payload = None
         if getattr(message, "reply_to_id", None) and getattr(message, "reply_to_text", None):
@@ -191,8 +191,22 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         ).update(seen=True, seen_at=datetime.utcnow())
 
     @database_sync_to_async
-    def save_message(self, text, sender_role, reply_to=None):
+    def save_message(self, text, sender_role, reply_to=None, client_temp_id=None):
         from chat.models import Message
+
+        # Idempotency for reconnect/retry: if the same client_temp_id was already
+        # persisted for this sender+chat, reuse it so we don't double-notify.
+        if client_temp_id:
+            existing = Message.objects(
+                couple_id=self.couple_id,
+                user_id=self.user_id,
+                sender="user",
+                mode="calm",
+                client_temp_id=client_temp_id,
+            ).first()
+            if existing:
+                return existing
+
         reply_kwargs = {}
         if isinstance(reply_to, dict):
             reply_id = str(reply_to.get("id") or reply_to.get("messageId") or "").strip()
@@ -213,6 +227,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             sender_role = sender_role,
             text        = text,
             mode        = "calm",
+            client_temp_id = client_temp_id,
             **reply_kwargs,
         )
         msg.save()

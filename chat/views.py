@@ -11,6 +11,7 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from datetime import timezone as dt_timezone
 import os
+import threading
 
 
 _cloudinary_uploader = None
@@ -539,9 +540,12 @@ class VoiceMessageView(APIView):
         try:
             result = cloudinary_uploader.upload(
                 audio_file,
-                resource_type = "auto",
+                resource_type = "video",
                 folder        = "solace/voice",
+                format        = "webm",
+                eager         = [],
                 overwrite     = False,
+                invalidate    = False,
                 use_filename  = False,
                 unique_filename = True,
             )
@@ -563,6 +567,10 @@ class VoiceMessageView(APIView):
         vm.save()
 
         # Push notification for partner (calm mode), guarded by idempotent claim.
+        push_token = None
+        notification_key = None
+        push_title = "New voice message 🎤"
+        push_body = f"{user.name or 'Your partner'} sent a voice message"
         try:
             if mode == "calm" and user.couple_id:
                 link = CoupleLink.objects.get(id=user.couple_id)
@@ -577,14 +585,23 @@ class VoiceMessageView(APIView):
                         ).update_one(set__last_notified_message_id=notification_key)
 
                         if claimed:
-                            send_push_notification(
-                                partner.fcm_token,
-                                title="New voice message 🎤",
-                                body=f"{user.name or 'Your partner'} sent a voice message",
-                                extra_data={"message_id": notification_key},
-                            )
+                            push_token = partner.fcm_token
         except Exception as e:
             print(f"Voice push notification error: {e}")
+
+        if push_token and notification_key:
+            def _send_voice_push_async():
+                try:
+                    send_push_notification(
+                        push_token,
+                        title=push_title,
+                        body=push_body,
+                        extra_data={"message_id": notification_key},
+                    )
+                except Exception:
+                    pass
+
+            threading.Thread(target=_send_voice_push_async, daemon=True).start()
 
         # HTTP response to the sender — isMine=True, full absolute URL
         sender_payload = _serialize_voice_message(
