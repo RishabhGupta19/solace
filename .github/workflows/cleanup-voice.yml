@@ -2,7 +2,7 @@ name: Daily Voice Message Cleanup
 
 on:
   schedule:
-    - cron: '0 2 * * *'   # 2 AM UTC daily — safety net for inactive couples
+    - cron: '0 * * * *'   # hourly UTC to keep deletion close to 24h expiry
   workflow_dispatch:        # also runnable manually from GitHub UI
 
 jobs:
@@ -17,3 +17,4 @@ jobs:
             --fail \
             --retry 3 \
             --retry-delay 30
+
