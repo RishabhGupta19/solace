@@ -67,15 +67,6 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
 
         message = messaging.Message(
             data=data,
-            android=messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    title=title,
-                    body=body,
-                    sound="default",
-                    click_action="FLUTTER_NOTIFICATION_CLICK",
-                ),
-            ),
             webpush=messaging.WebpushConfig(
                 headers={
                     # Collapse retries for same logical notification.

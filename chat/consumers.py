@@ -28,6 +28,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data):
         data = json.loads(text_data)
+        print(f"[RECEIVE] user={self.user_id} channel={self.channel_name} type={data.get('type')} text={str(data.get('text',''))[:20]}")
 
         # Mark messages as seen
         if data.get("type") == "seen":
@@ -94,6 +95,8 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             }
         )
 
+        await self.send_text_push(str(message.id), text)
+
     # ── Channel layer event handlers ──────────────────────────────────────────
 
     async def chat_message(self, event):
@@ -125,6 +128,21 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             "expires_at":  event.get("expires_at"),
         }))
 
+    async def voice(self, event):
+        """Compatibility handler for legacy channel messages using type='voice'."""
+        await self.send(text_data=json.dumps({
+            "id":          event.get("id", ""),
+            "type":        "voice",
+            "sender":      "user",
+            "sender_role": event.get("sender_role", ""),
+            "sender_id":   event.get("sender_id", ""),
+            "audio_url":   event.get("audio_url") or event.get("url", ""),
+            "duration":    event.get("duration", 0),
+            "mode":        event.get("mode", "calm"),
+            "timestamp":   event.get("timestamp", ""),
+            "expires_at":  event.get("expires_at"),
+        }))
+
     async def messages_seen(self, event):
         await self.send(text_data=json.dumps({
             "type":        "seen",
@@ -132,20 +150,6 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             "seen_by":     event["seen_by"],
         }))
     
-    async def voice(self, event):
-        """Handle voice messages sent via channel layer group_send with type 'voice'.
-
-        This prevents Channels from raising "No handler for message type voice"
-        if other parts of the system publish voice events.
-        """
-        await self.send(text_data=json.dumps({
-            "type": "voice",
-            "id": event.get("id", ""),
-            "url": event.get("url", ""),
-            "sender_id": event.get("sender_id", ""),
-            "sender_name": event.get("sender_name", ""),
-            "timestamp": event.get("timestamp", ""),
-        }))
     async def typing_indicator(self, event):
         # Only forward to other connections, not the sender
         if event.get("channel") != self.channel_name:
@@ -191,6 +195,35 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         ).update(seen=True, seen_at=datetime.utcnow())
 
     @database_sync_to_async
+    def send_text_push(self, message_id, text):
+        print(f"[PUSH_ATTEMPT] message_id={message_id} from_user={self.user_id}")
+        try:
+            link = CoupleLink.objects.get(id=self.couple_id)
+            partner_id = link.partner_id if link.creator_id == self.user_id else link.creator_id
+            if not partner_id:
+                return
+            partner = User.objects.get(id=partner_id)
+            if not partner.fcm_token:
+                return
+            notification_key = f"text:{message_id}"
+            claimed = User.objects(
+                id=partner_id,
+                last_notified_message_id__ne=notification_key,
+            ).update_one(set__last_notified_message_id=notification_key)
+            if claimed:
+                print(f"[PUSH_CLAIMED] sending push for message_id={message_id}")
+                send_push_notification(
+                    partner.fcm_token,
+                    title="New message 💬",
+                    body=text[:50],
+                    extra_data={"message_id": message_id},
+                )
+            else:
+                print(f"[PUSH_SKIPPED] already claimed for message_id={message_id}")
+        except Exception as e:
+            print(f"Text push error: {e}")
+
+    @database_sync_to_async
     def save_message(self, text, sender_role, reply_to=None, client_temp_id=None):
         from chat.models import Message
 
@@ -231,26 +264,4 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             **reply_kwargs,
         )
         msg.save()
-        try:
-            link       = CoupleLink.objects.get(id=self.couple_id)
-            partner_id = link.partner_id if link.creator_id == self.user_id else link.creator_id
-            if partner_id:
-                partner = User.objects.get(id=partner_id)
-                if partner.fcm_token:
-                    message_id = str(msg.id)
-                    claimed = User.objects(
-                        id=partner_id,
-                        last_notified_message_id__ne=message_id,
-                    ).update_one(set__last_notified_message_id=message_id)
-
-                    # Send only once per message id, even if this path executes twice.
-                    if claimed:
-                        send_push_notification(
-                            partner.fcm_token,
-                            title="New message 💬",
-                            body=text[:50],
-                            extra_data={"message_id": message_id},
-                        )
-        except Exception as e:
-            print(f"Notification error: {e}")
         return msg
