@@ -41,6 +41,7 @@ def _serialize_message(m):
     is_deleted = bool(getattr(m, "is_deleted", False))
     out = {
         "id":          str(m.id),
+        "seen":        bool(getattr(m, 'seen', False)),
         "type":        "text",
         "sender":      m.sender,
         "sender_role": m.sender_role,
