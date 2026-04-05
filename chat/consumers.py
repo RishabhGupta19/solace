@@ -1,4 +1,5 @@
 import json
+import asyncio
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from urllib.parse import parse_qs
@@ -95,7 +96,8 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             }
         )
 
-        await self.send_text_push(str(message.id), text)
+        # Delay push briefly so real-time "seen" can suppress notification noise.
+        asyncio.create_task(self.send_text_push_if_unseen(str(message.id), text))
 
     # ── Channel layer event handlers ──────────────────────────────────────────
 
@@ -193,6 +195,23 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
             id__in=message_ids,
             user_id__ne=self.user_id   # only mark partner's messages
         ).update(seen=True, seen_at=datetime.utcnow())
+
+    @database_sync_to_async
+    def is_message_seen(self, message_id):
+        from chat.models import Message
+        msg = Message.objects(id=message_id).first()
+        return bool(getattr(msg, "seen", False)) if msg else False
+
+    async def send_text_push_if_unseen(self, message_id, text):
+        # Give receiver a short window to mark as seen while actively chatting.
+        await asyncio.sleep(1.5)
+        try:
+            if await self.is_message_seen(message_id):
+                print(f"[PUSH_SKIPPED] seen within delay message_id={message_id}")
+                return
+        except Exception as e:
+            print(f"[PUSH_DELAY_CHECK_ERROR] message_id={message_id} err={e}")
+        await self.send_text_push(message_id, text)
 
     @database_sync_to_async
     def send_text_push(self, message_id, text):
