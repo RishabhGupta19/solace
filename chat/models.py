@@ -16,6 +16,7 @@ class Message(me.Document):
     reply_to_id = me.StringField(default=None)
     reply_to_text = me.StringField(default=None)
     reply_to_sender_name = me.StringField(default=None)
+    client_temp_id = me.StringField(default=None)
     mode        = me.StringField(choices=["calm", "vent"], required=True)
     timestamp   = me.DateTimeField(default=datetime.utcnow)
 

@@ -11,6 +11,7 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from datetime import timezone as dt_timezone
 import os
+import threading
 
 
 _cloudinary_uploader = None
@@ -518,6 +519,9 @@ class VoiceMessageView(APIView):
         mode       = request.data.get("mode", "calm")
         duration   = float(request.data.get("duration", 0) or 0)
         couple_id  = user.couple_id or str(user.id)
+       
+        if audio_file is not None:
+            print(f"[VoiceMessageView] file name={getattr(audio_file, 'name', '')} size={getattr(audio_file, 'size', 'unknown')}")
 
         if not audio_file:
             return Response({"error": "audio file is required"}, status=400)
@@ -537,17 +541,23 @@ class VoiceMessageView(APIView):
 
         # ── Cloudinary-only upload path ───────────────────────────────────────
         try:
+            print("[VoiceMessageView] cloudinary upload start")
             result = cloudinary_uploader.upload(
                 audio_file,
-                resource_type = "auto",
+                resource_type = "video",
                 folder        = "solace/voice",
+                format        = "webm",
+                eager         = [],
                 overwrite     = False,
+                invalidate    = False,
                 use_filename  = False,
                 unique_filename = True,
             )
             audio_url            = result["secure_url"]
             cloudinary_public_id = result["public_id"]
+            print(f"[VoiceMessageView] cloudinary upload success public_id={cloudinary_public_id}")
         except Exception as e:
+            print(f"[VoiceMessageView] cloudinary upload failed error={e}")
             return Response({"error": f"Cloudinary upload failed: {e}"}, status=500)
 
         # ── Persist to MongoDB ─────────────────────────────────────────────
@@ -561,12 +571,18 @@ class VoiceMessageView(APIView):
             mode                 = mode,
         )
         vm.save()
+        print(f"[VoiceMessageView] db save success vm_id={vm.id} mode={mode}")
 
         # Push notification for partner (calm mode), guarded by idempotent claim.
+        push_token = None
+        notification_key = None
+        push_title = "New voice message 🎤"
+        push_body = f"{user.name or 'Your partner'} sent a voice message"
         try:
             if mode == "calm" and user.couple_id:
                 link = CoupleLink.objects.get(id=user.couple_id)
                 partner_id = link.partner_id if link.creator_id == str(user.id) else link.creator_id
+                print(f"[VoiceMessageView] partner resolution partner_id={partner_id}")
                 if partner_id:
                     partner = User.objects.get(id=partner_id)
                     if partner.fcm_token:
@@ -575,16 +591,35 @@ class VoiceMessageView(APIView):
                             id=partner_id,
                             last_notified_message_id__ne=notification_key,
                         ).update_one(set__last_notified_message_id=notification_key)
+                        print(f"[VoiceMessageView] push claim key={notification_key} claimed={bool(claimed)}")
 
                         if claimed:
-                            send_push_notification(
-                                partner.fcm_token,
-                                title="New voice message 🎤",
-                                body=f"{user.name or 'Your partner'} sent a voice message",
-                                extra_data={"message_id": notification_key},
-                            )
+                            push_token = partner.fcm_token
+                    else:
+                        print("[VoiceMessageView] partner has no fcm_token")
+            else:
+                print(f"[VoiceMessageView] push skipped mode={mode} couple_linked={bool(user.couple_id)}")
         except Exception as e:
             print(f"Voice push notification error: {e}")
+
+        if push_token and notification_key:
+            def _send_voice_push_async():
+                try:
+                    print(f"[VoiceMessageView] async push send start key={notification_key}")
+                    send_push_notification(
+                        push_token,
+                        title=push_title,
+                        body=push_body,
+                        extra_data={"message_id": notification_key},
+                    )
+                    print(f"[VoiceMessageView] async push send done key={notification_key}")
+                except Exception:
+                    print(f"[VoiceMessageView] async push send failed key={notification_key}")
+                    pass
+
+            threading.Thread(target=_send_voice_push_async, daemon=True).start()
+        else:
+            print(f"[VoiceMessageView] async push not started key={notification_key}")
 
         # HTTP response to the sender — isMine=True, full absolute URL
         sender_payload = _serialize_voice_message(
@@ -597,11 +632,13 @@ class VoiceMessageView(APIView):
         # ── Broadcast to partner via WebSocket ────────────────────────────────
         room = f"calm_{couple_id}" if mode == "calm" else f"vent_{couple_id}_{user.id}"
         try:
+            print(f"[VoiceMessageView] ws broadcast start room={room} vm_id={vm.id}")
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
                 room,
                 {"type": "voice_message", **ws_payload},
             )
+            print(f"[VoiceMessageView] ws broadcast done room={room} vm_id={vm.id}")
         except Exception as e:
             print(f"WS broadcast error: {e}")
 
