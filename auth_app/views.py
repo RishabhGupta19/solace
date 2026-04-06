@@ -202,10 +202,10 @@ class UploadProfilePicView(APIView):
         if file.content_type not in allowed:
             return Response({"error": "Invalid file type"}, status=400)
 
-        # Validate file size (2MB)
-        max_size = 2 * 1024 * 1024
+        # Validate file size (15MB)
+        max_size = 15 * 1024 * 1024
         if file.size > max_size:
-            return Response({"error": "File too large (max 2MB)"}, status=400)
+            return Response({"error": "File too large (max 15MB)"}, status=400)
 
         user = request.user
         try:
