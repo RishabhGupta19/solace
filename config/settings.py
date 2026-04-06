@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     "assessment",
     "chat",
     "goals",
+    "music",
 ]
 
 MIDDLEWARE = [
