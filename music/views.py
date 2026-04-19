@@ -12,6 +12,7 @@ def _serialize(song):
         "title":        song.title,
         "channelTitle": song.channel_title,
         "thumbnail":    song.thumbnail,
+        "audioUrl":     song.audio_url or "",
         "savedAt":      song.saved_at.isoformat(),
         "savedBy":      song.saved_by,
     }
@@ -36,6 +37,7 @@ class MusicLibraryView(APIView):
         title         = request.data.get("title", "").strip()
         channel_title = request.data.get("channelTitle", "").strip()
         thumbnail     = request.data.get("thumbnail", "").strip()
+        audio_url     = request.data.get("audioUrl", "").strip()
 
         if not video_id or not title:
             return Response({"error": "videoId and title are required"}, status=400)
@@ -48,6 +50,7 @@ class MusicLibraryView(APIView):
                 title=title,
                 channel_title=channel_title,
                 thumbnail=thumbnail,
+                audio_url=audio_url,
             )
             song.save()
             return Response(_serialize(song), status=201)
