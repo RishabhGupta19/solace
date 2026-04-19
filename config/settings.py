@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "chat",
     "goals",
     "music",
+    "gallery",
 ]
 
 MIDDLEWARE = [
@@ -100,14 +101,9 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_TZ = True
 
-# Cloudinary configuration (reads from environment)
-CLOUDINARY_CLOUD_NAME = os.getenv('CLOUD_NAME')
-CLOUDINARY_API_KEY = os.getenv('API_KEY')
-CLOUDINARY_API_SECRET = os.getenv('API_SECRET')
-if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
-    cloudinary.config(
-        cloud_name=CLOUDINARY_CLOUD_NAME,
-        api_key=CLOUDINARY_API_KEY,
-        api_secret=CLOUDINARY_API_SECRET,
-        secure=True,
-    )
+# Cloudinary configuration — the SDK auto-reads CLOUDINARY_URL from the
+# environment (format: cloudinary://API_KEY:API_SECRET@CLOUD_NAME).
+# No manual config() call is needed when that env var is set.
+_cloudinary_url = os.getenv('CLOUDINARY_URL', '')
+if _cloudinary_url:
+    cloudinary.config(secure=True)  # ensure HTTPS; credentials come from env
