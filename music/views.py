@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from mongoengine.errors import NotUniqueError
 from .models import SavedSong
+import os
 
 
 def _serialize(song):
@@ -16,6 +17,43 @@ def _serialize(song):
         "savedAt":      song.saved_at.isoformat(),
         "savedBy":      song.saved_by,
     }
+
+
+def _notify_partner_of_new_song(user, song):
+    """Send push notification to the partner when a new song is added."""
+    try:
+        from couples.models import CoupleLink
+        from auth_app.models import User
+        from notifications import send_push_notification
+
+        couple_id = user.couple_id
+        if not couple_id:
+            return
+
+        link = CoupleLink.objects.get(id=couple_id)
+        partner_id = link.partner_id if link.creator_id == str(user.id) else link.creator_id
+        if not partner_id:
+            return
+
+        partner = User.objects.get(id=partner_id)
+        if not partner.fcm_token:
+            return
+
+        frontend_url = os.getenv("FRONTEND_URL", "https://two-hearts-chat.vercel.app").rstrip("/")
+        music_url = f"{frontend_url}/#/music?highlight={song.video_id}"
+
+        send_push_notification(
+            partner.fcm_token,
+            title=f"{user.name} added a new song 🎵",
+            body=f'"{song.title}" was added to the library. Want to listen now?',
+            extra_data={
+                "url": music_url,
+                "song_id": song.video_id,
+                "type": "new_song",
+            },
+        )
+    except Exception as e:
+        print(f"[MusicLibrary] Failed to notify partner: {e}")
 
 
 class MusicLibraryView(APIView):
@@ -53,9 +91,13 @@ class MusicLibraryView(APIView):
                 audio_url=audio_url,
             )
             song.save()
+
+            # Notify partner about the new song (fire-and-forget)
+            _notify_partner_of_new_song(user, song)
+
             return Response(_serialize(song), status=201)
         except NotUniqueError:
-            # Already saved — return 200 with existing record
+            # Already saved — return 200 with existing record (no notification)
             existing = SavedSong.objects(couple_id=couple_id, video_id=video_id).first()
             return Response(_serialize(existing), status=200)
 
