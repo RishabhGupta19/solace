@@ -10,3 +10,4 @@ channels>=4.0
 daphne>=4.0
 cloudinary>=1.36
 firebase-admin>=6.0
+cryptography>=42.0
