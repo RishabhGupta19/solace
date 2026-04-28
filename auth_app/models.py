@@ -32,8 +32,18 @@ class User(me.Document):
     created_at = me.DateTimeField(default=datetime.utcnow)
     
     # For forgot password by madhu
-    otp = me.StringField()
-    otp_expiry = me.DateTimeField()
+    # otp = me.StringField()
+    # otp_expiry = me.DateTimeField()
+    # reset_otp_attempts = me.IntField(default=0)
+    # reset_otp_last_sent = me.DateTimeField()
+    reset_otp = me.StringField()
+    reset_otp_expiry = me.DateTimeField()
+    reset_otp_attempts = me.IntField(default=0)
+    reset_otp_last_sent = me.DateTimeField()
+
+    # ✅ ADD THESE (VERY IMPORTANT)
+    reset_token = me.StringField()
+    reset_token_expiry = me.DateTimeField()
 
     # Keep schema tolerant for rolling deployments where some documents may
     # already contain newly introduced fields.

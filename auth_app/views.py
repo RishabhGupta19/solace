@@ -12,6 +12,7 @@ from django.conf import settings
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from django.core.mail import EmailMultiAlternatives
+from django.contrib.auth.hashers import make_password
 
 import hashlib
 
@@ -19,6 +20,7 @@ import jwt
 import random
 import string
 import cloudinary.uploader
+import secrets
 
 
 def _generate_code():
@@ -153,49 +155,105 @@ class LoginView(APIView):
         return Response({"user": _serialize_user(user), **tokens})
 
 # view for forgot PAssword feature otp generation
+# class ForgotPasswordView(APIView):
+#     permission_classes = [AllowAny]
+
+#     def post(self, request):
+#         email = request.data.get("email", "").strip().lower()
+
+#         user = User.objects(email=email).first()
+
+#         # Security: don't reveal user existence
+#         if not user:
+#             return Response({"message": "If email exists, OTP sent"})
+
+#         # Generate OTP
+#         otp = str(random.randint(100000, 999999))
+
+#         # Hash OTP
+#         hashed_otp = hashlib.sha256(otp.encode()).hexdigest()
+
+#         user.otp = hashed_otp
+#         user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+#         user.save()
+
+#         # Send email
+#         # send_mail(
+#         #     subject="Password Reset OTP",
+#         #     message=f"Your OTP is: {otp}",
+#         #     from_email=settings.EMAIL_HOST_USER,
+#         #     recipient_list=[email],
+#         #     fail_silently=False,
+#         # )
+#         # Render HTML template
+#         html_content = render_to_string(
+#             "emails/otp_email.html",
+#             {
+#                 "otp": otp,
+#                 "year": datetime.utcnow().year
+#             }
+#         )
+
+#         # Fallback plain text
+#         text_content = strip_tags(html_content)
+
+#         # Create email
+#         email_message = EmailMultiAlternatives(
+#             subject="Your Solace OTP Code",
+#             body=text_content,
+#             from_email=settings.EMAIL_HOST_USER,
+#             to=[email],
+#         )
+
+#         # Attach HTML
+#         email_message.attach_alternative(html_content, "text/html")
+
+#         # Send email
+#         email_message.send()
+
+#         return Response({"message": "OTP sent successfully"})
+import hashlib, random
+from datetime import datetime, timedelta
+
 class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get("email", "").strip().lower()
-
+        email = request.data.get("email")
         user = User.objects(email=email).first()
 
-        # Security: don't reveal user existence
-        if not user:
-            return Response({"message": "If email exists, OTP sent"})
+        # ALWAYS SAME RESPONSE
+        response_msg = {"message": "If an account exists, an OTP has been sent."}
 
-        # Generate OTP
+        if not user:
+            return Response(response_msg, status=200)
+
+        now = datetime.utcnow()
+
+        # ⛔ RATE LIMIT (30 sec cooldown)
+        if user.reset_otp_last_sent and (now - user.reset_otp_last_sent).seconds < 30:
+            return Response({"error": "Please wait before requesting again"}, status=429)
+
+        # 🔢 GENERATE OTP
         otp = str(random.randint(100000, 999999))
 
-        # Hash OTP
+        # 🔐 HASH OTP
         hashed_otp = hashlib.sha256(otp.encode()).hexdigest()
 
-        user.otp = hashed_otp
-        user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+        user.reset_otp = hashed_otp
+        user.reset_otp_expiry = now + timedelta(minutes=10)
+        user.reset_otp_attempts = 0
+        user.reset_otp_last_sent = now
         user.save()
 
-        # Send email
-        # send_mail(
-        #     subject="Password Reset OTP",
-        #     message=f"Your OTP is: {otp}",
-        #     from_email=settings.EMAIL_HOST_USER,
-        #     recipient_list=[email],
-        #     fail_silently=False,
-        # )
-        # Render HTML template
-        html_content = render_to_string(
-            "emails/otp_email.html",
-            {
-                "otp": otp,
-                "year": datetime.utcnow().year
-            }
-        )
+        # 📧 SEND EMAIL (your template)
+        html_content = render_to_string("emails/otp_email.html", {
+            "otp": otp,
+            "year": now.year
+        })
 
-        # Fallback plain text
         text_content = strip_tags(html_content)
 
-        # Create email
         email_message = EmailMultiAlternatives(
             subject="Your Solace OTP Code",
             body=text_content,
@@ -203,61 +261,136 @@ class ForgotPasswordView(APIView):
             to=[email],
         )
 
-        # Attach HTML
         email_message.attach_alternative(html_content, "text/html")
-
-        # Send email
         email_message.send()
 
-        return Response({"message": "OTP sent successfully"})
+        return Response(response_msg, status=200)
+
 
 # view for verify otp for forgot password feature
+# class VerifyOTPView(APIView):
+#     permission_classes = [AllowAny]
+
+#     def post(self, request):
+#         email = request.data.get("email", "").strip().lower()
+#         otp = request.data.get("otp", "")
+
+#         user = User.objects(email=email).first()
+
+#         if not user:
+#             return Response({"error": "Invalid OTP"}, status=400)
+
+#         hashed_input = hashlib.sha256(otp.encode()).hexdigest()
+
+#         if (
+#             user.otp != hashed_input or
+#             not user.otp_expiry or
+#             user.otp_expiry < datetime.utcnow()
+#         ):
+#             return Response({"error": "Invalid or expired OTP"}, status=400)
+
+#         return Response({"message": "OTP verified"})
+import secrets
+from datetime import datetime, timedelta
+import hashlib
+
 class VerifyOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get("email", "").strip().lower()
-        otp = request.data.get("otp", "")
+        email = request.data.get("email")
+        otp = request.data.get("otp")
 
         user = User.objects(email=email).first()
 
-        if not user:
+        if not user or not user.reset_otp:
             return Response({"error": "Invalid OTP"}, status=400)
 
-        hashed_input = hashlib.sha256(otp.encode()).hexdigest()
+        if user.reset_otp_attempts >= 5:
+            return Response({"error": "Too many attempts. Request new OTP."}, status=429)
 
-        if (
-            user.otp != hashed_input or
-            not user.otp_expiry or
-            user.otp_expiry < datetime.utcnow()
-        ):
-            return Response({"error": "Invalid or expired OTP"}, status=400)
+        if datetime.utcnow() > user.reset_otp_expiry:
+            return Response({"error": "OTP expired"}, status=400)
 
-        return Response({"message": "OTP verified"})
+        hashed_otp = hashlib.sha256(otp.encode()).hexdigest()
+
+        if hashed_otp != user.reset_otp:
+            user.reset_otp_attempts += 1
+            user.save()
+            return Response({"error": "Invalid OTP"}, status=400)
+
+        # ✅ GENERATE TOKEN
+        token = secrets.token_urlsafe(32)
+
+        user.reset_token = token
+        user.reset_token_expiry = datetime.utcnow() + timedelta(minutes=10)
+
+        # CLEAR OTP
+        user.reset_otp = None
+        user.reset_otp_expiry = None
+        user.reset_otp_attempts = 0
+
+        user.save()
+
+        return Response({
+            "message": "OTP verified",
+            "token": token
+        }, status=200)
+
+
 
 # view for reset password for the forgot password feature
+# class ResetPasswordView(APIView):
+#     permission_classes = [AllowAny]
+
+#     def post(self, request):
+#         email = request.data.get("email", "").strip().lower()
+#         new_password = request.data.get("new_password", "")
+
+#         user = User.objects(email=email).first()
+
+#         if not user:
+#             return Response({"error": "User not found"}, status=400)
+
+#         # Use your existing hashing util
+#         user.password = hash_password(new_password)
+
+#         # Clear OTP
+#         user.otp = None
+#         user.otp_expiry = None
+
+#         user.save()
+
+#         return Response({"message": "Password reset successful"})
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get("email", "").strip().lower()
-        new_password = request.data.get("new_password", "")
+        email = request.data.get("email")
+        new_password = request.data.get("new_password")
 
         user = User.objects(email=email).first()
 
         if not user:
-            return Response({"error": "User not found"}, status=400)
+            return Response({"error": "Invalid request"}, status=400)
 
-        # Use your existing hashing util
-        user.password = hash_password(new_password)
+        # 🔒 PASSWORD VALIDATION
+        if len(new_password) < 6:
+            return Response({"error": "Password too short"}, status=400)
 
-        # Clear OTP
-        user.otp = None
-        user.otp_expiry = None
+        # 🔐 HASH PASSWORD
+        user.password = make_password(new_password)
+
+        # 🧹 CLEAR OTP DATA
+        user.reset_otp = None
+        user.reset_otp_expiry = None
+        user.reset_otp_attempts = 0
 
         user.save()
 
-        return Response({"message": "Password reset successful"})
+        return Response({"message": "Password updated successfully"}, status=200)
+
+
 
 class RefreshView(APIView):
     permission_classes = [AllowAny]
