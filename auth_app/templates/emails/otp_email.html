@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Solace OTP</title>
+</head>
+
+<body style="margin:0; padding:0; background:#f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+
+  <div style="width:100%; padding:30px 10px;">
+
+    <!-- Card -->
+    <div style="max-width:420px; margin:auto; background:#ffffff; border-radius:16px; padding:30px 24px; box-shadow:0 10px 25px rgba(0,0,0,0.05);">
+
+      <!-- Header -->
+      <div style="text-align:center; margin-bottom:20px;">
+        <h1 style="margin:0; font-size:26px; font-weight:700; color:#111;">
+          Solace
+        </h1>
+        <p style="margin-top:6px; font-size:13px; color:#6b7280;">
+          A space just for the two of you
+        </p>
+      </div>
+
+      <!-- Divider -->
+      <div style="height:1px; background:#eee; margin:20px 0;"></div>
+
+      <!-- Title -->
+      <h2 style="text-align:center; font-size:18px; margin:0; color:#111;">
+        Password Reset
+      </h2>
+
+      <p style="text-align:center; font-size:13px; color:#6b7280; margin-top:8px;">
+        Use the OTP below to reset your password
+      </p>
+
+      <!-- OTP BOX -->
+      <div style="text-align:center; margin:25px 0;">
+        <div style="
+          display:inline-block;
+          padding:14px 28px;
+          font-size:26px;
+          letter-spacing:6px;
+          font-weight:600;
+          background:#f9fafb;
+          border-radius:12px;
+          border:1px solid #e5e7eb;
+          color:#111;
+        ">
+          {{ otp }}
+        </div>
+      </div>
+
+      <!-- Info -->
+      <p style="text-align:center; font-size:12px; color:#9ca3af;">
+        This OTP is valid for 10 minutes.
+      </p>
+
+      <!-- Warning -->
+      <p style="text-align:center; font-size:11px; color:#9ca3af; margin-top:12px;">
+        If you didn’t request this, you can safely ignore this email.
+      </p>
+
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align:center; margin-top:20px; font-size:11px; color:#9ca3af;">
+      © {{ year }} Solace. All rights reserved.
+    </div>
+
+  </div>
+
+</body>
+</html>

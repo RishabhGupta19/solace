@@ -30,6 +30,10 @@ class User(me.Document):
     # Profile picture stored on Cloudinary: {'url': str, 'public_id': str}
     profilePic = me.DictField(default=dict)
     created_at = me.DateTimeField(default=datetime.utcnow)
+    
+    # For forgot password by madhu
+    otp = me.StringField()
+    otp_expiry = me.DateTimeField()
 
     # Keep schema tolerant for rolling deployments where some documents may
     # already contain newly introduced fields.
