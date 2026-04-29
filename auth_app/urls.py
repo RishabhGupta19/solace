@@ -10,7 +10,6 @@ urlpatterns = [
     path("profile",  UpdateProfileView.as_view()),
     path("fcm-token", SaveFCMTokenView.as_view()),
     path("upload-profile-pic", UploadProfilePicView.as_view()),
-     # NEW ROUTES for forgot password feature
     path("forgot-password", ForgotPasswordView.as_view()),
     path("verify-otp", VerifyOTPView.as_view()),
     path("reset-password", ResetPasswordView.as_view()),
