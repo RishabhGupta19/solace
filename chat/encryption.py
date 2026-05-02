@@ -108,10 +108,20 @@ class EncryptedStringField(me.StringField):
         value = super().to_mongo(value)
         if value is None:
             return None
-        return encrypt_text(str(value))
+        str_value = str(value)
+        encrypted = encrypt_text(str_value)
+        # Log if encryption was applied
+        if encrypted.startswith(_CIPHER_PREFIX) and not str_value.startswith(_CIPHER_PREFIX):
+            logger.debug(f"[ENCRYPT] encrypting {len(str_value)} chars -> {len(encrypted)} chars")
+        return encrypted
 
     def to_python(self, value):
         value = super().to_python(value)
         if value is None:
             return None
-        return decrypt_text(str(value))
+        str_value = str(value)
+        decrypted = decrypt_text(str_value)
+        # Log if this is legacy plaintext (not encrypted)
+        if not str_value.startswith(_CIPHER_PREFIX):
+            logger.debug(f"[PLAINTEXT_LEGACY] returning plaintext message (not encrypted)")
+        return decrypted
