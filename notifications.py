@@ -55,7 +55,7 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
         chat_url = f"{frontend_url}/#/chat"
         notification_id = str((extra_data or {}).get("message_id") or uuid.uuid4())
 
-        # Data-only payload for web prevents browser + service worker double-display.
+        # Data payload for custom service worker handling
         data = {
             "url": chat_url,
             "title": str(title or "New message"),
@@ -65,12 +65,29 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
         if extra_data:
             data.update({str(k): str(v) for k, v in extra_data.items()})
 
+        # Android notification with HIGH priority
+        android_notification = messaging.AndroidNotification(
+            title=str(title or "New message"),
+            body=str(body or ""),
+            priority="high",  # HIGH priority for better popup chances
+            click_action=chat_url,
+        )
+
         message = messaging.Message(
             data=data,
+            notification=messaging.Notification(
+                title=str(title or "New message"),
+                body=str(body or ""),
+            ),
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=android_notification,
+            ),
             webpush=messaging.WebpushConfig(
                 headers={
                     # Collapse retries for same logical notification.
                     "Topic": notification_id,
+                    "Urgency": "high",  # High urgency for web push
                 },
                 fcm_options=messaging.WebpushFCMOptions(
                     link=chat_url
@@ -79,7 +96,7 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
             token=fcm_token,
         )
         response = messaging.send(message)
-        print(f"Notification sent: {response}")
+        print(f"Notification sent (HIGH priority): {response}")
         return response
     except Exception as e:
         print(f"Notification failed: {e}")
