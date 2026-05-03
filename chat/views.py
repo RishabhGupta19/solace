@@ -12,6 +12,7 @@ from django.utils import timezone
 from datetime import timezone as dt_timezone
 import os
 import threading
+from .encryption import decrypt_text
 
 
 _cloudinary_uploader = None
@@ -39,6 +40,8 @@ def _groq(prompt: str) -> str:
 
 def _serialize_message(m):
     is_deleted = bool(getattr(m, "is_deleted", False))
+    raw_text = getattr(m, "text", "") or ""
+    reply_text = getattr(m, "reply_to_text", "") or ""
     out = {
         "id":          str(m.id),
         "seen":        bool(getattr(m, 'seen', False)),
@@ -46,7 +49,7 @@ def _serialize_message(m):
         "sender":      m.sender,
         "sender_role": m.sender_role,
         "sender_id":   m.user_id or "",
-        "text":        "This message was deleted" if is_deleted else m.text,
+        "text":        "This message was deleted" if is_deleted else decrypt_text(raw_text),
         "is_deleted":  is_deleted,
         "deleted_at":  m.deleted_at.isoformat() if getattr(m, "deleted_at", None) else None,
         "mode":        m.mode,
@@ -55,13 +58,13 @@ def _serialize_message(m):
     if getattr(m, "reply_to_id", None) and getattr(m, "reply_to_text", None):
         out["reply_to"] = {
             "id": m.reply_to_id,
-            "text": m.reply_to_text,
+            "text": decrypt_text(reply_text),
             "sender_name": getattr(m, "reply_to_sender_name", None) or "",
         }
     if getattr(m, "reply_to_message_id", None) and getattr(m, "reply_to_text", None):
         out["replyTo"] = {
             "messageId": m.reply_to_message_id,
-            "text": m.reply_to_text,
+            "text": decrypt_text(reply_text),
         }
     return out
 
@@ -227,10 +230,16 @@ class MessageSearchView(APIView):
         if mode != "calm":
             return Response({"results": []}, status=200)
 
-        qs = Message.objects(couple_id=couple_id, text__icontains=query)
-        qs = qs.filter(mode="calm")
+        qs = Message.objects(couple_id=couple_id, mode="calm").order_by("-timestamp")
+        rows = []
+        query_lower = query.lower()
+        for msg in qs:
+            text = decrypt_text(getattr(msg, "text", "") or "")
+            if query_lower in text.lower():
+                rows.append(msg)
+            if len(rows) >= limit:
+                break
 
-        rows = list(qs.order_by("-timestamp").limit(limit))
         rows.reverse()
         return Response({"results": [_serialize_message(m) for m in rows]})
 
@@ -411,7 +420,7 @@ Return ONLY valid JSON in this exact format with no markdown and no extra text:
         messages = [{"role": "system", "content": system_prompt}]
         for msg in history:
             role = "user" if msg.sender == "user" else "assistant"
-            messages.append({"role": role, "content": msg.text})
+            messages.append({"role": role, "content": decrypt_text(getattr(msg, "text", "") or "")})
         messages.append({"role": "user", "content": message_text})
 
         try:

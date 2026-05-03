@@ -14,3 +14,4 @@ Pillow>=11.0
 django-redis>=6.0
 redis>=7.0
 requests>=2.31
+cryptography>=42.0

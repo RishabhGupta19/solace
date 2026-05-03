@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 from couples.models import CoupleLink
 from auth_app.models import User
 from notifications import send_push_notification
+from .encryption import decrypt_text
 
 
 class CalmChatConsumer(AsyncWebsocketConsumer):
@@ -68,7 +69,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         if getattr(message, "reply_to_id", None) and getattr(message, "reply_to_text", None):
             reply_payload = {
                 "id": message.reply_to_id,
-                "text": message.reply_to_text,
+                "text": decrypt_text(getattr(message, "reply_to_text", "") or ""),
                 "sender_name": getattr(message, "reply_to_sender_name", "") or "",
             }
 
@@ -76,7 +77,7 @@ class CalmChatConsumer(AsyncWebsocketConsumer):
         if getattr(message, "reply_to_message_id", None) and getattr(message, "reply_to_text", None):
             reply_to_camel = {
                 "messageId": message.reply_to_message_id,
-                "text": message.reply_to_text,
+                "text": decrypt_text(getattr(message, "reply_to_text", "") or ""),
             }
 
         await self.channel_layer.group_send(
