@@ -84,6 +84,16 @@ CORS_ALLOW_CREDENTIALS = True
 # ── Groq ──────────────────────────────────────────────────────────────────────
 GROQ_KEY = os.getenv("GROQ_KEY", "")
 
+# ── Cache / Gallery Encryption ────────────────────────────────────────────────
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://localhost:6379/1"),
+        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+    }
+}
+GALLERY_ENCRYPTION_KEY = os.getenv("GALLERY_ENCRYPTION_KEY", "").encode()
+
 # ── Channels ──────────────────────────────────────────────────────────────────
 CHANNEL_LAYERS = {
     "default": {
