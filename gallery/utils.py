@@ -6,7 +6,7 @@ import requests
 from cryptography.fernet import Fernet
 from django.conf import settings
 from django.core.cache import cache
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 cipher = Fernet(settings.GALLERY_ENCRYPTION_KEY)
@@ -14,7 +14,10 @@ cipher = Fernet(settings.GALLERY_ENCRYPTION_KEY)
 
 def upload_encrypted(file_obj):
     file_obj.seek(0)
-    image = Image.open(file_obj).convert("RGB")
+    image = Image.open(file_obj)
+    # Preserve EXIF orientation by applying rotation before conversion
+    image = ImageOps.exif_transpose(image)
+    image = image.convert("RGB")
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=75, optimize=True)
     encrypted = cipher.encrypt(buffer.getvalue())
