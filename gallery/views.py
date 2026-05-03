@@ -1,9 +1,12 @@
 import os
-import time
+
+from django.http import StreamingHttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
+
+from .utils import get_decrypted_photo, upload_encrypted
 from .models import GalleryPhoto
 
 # Lazy-loaded Cloudinary uploader (same pattern as chat/views.py)
@@ -24,16 +27,29 @@ def _serialize_photo(photo):
         "id": str(photo.id),
         "couple_id": photo.couple_id,
         "uploaded_by": photo.uploaded_by,
-        "image_url": photo.image_url,
+        "image_url": _photo_serve_url(photo.id),
         "note": photo.note,
         "created_at": photo.created_at.isoformat() if photo.created_at else None,
     }
 
 
+def _photo_serve_url(photo_id):
+    return f"/api/gallery/photo/{photo_id}/"
+
+
+def _legacy_public_id(image_url):
+    if not image_url or "/upload/" not in image_url:
+        return None
+    suffix = image_url.split("/upload/", 1)[1].split("?", 1)[0]
+    if "/" in suffix and suffix.split("/", 1)[0].startswith("v"):
+        suffix = suffix.split("/", 1)[1]
+    return suffix.rsplit(".", 1)[0]
+
+
 class GalleryListCreateView(APIView):
     """
     GET  — list all photos for the authenticated user's couple.
-    POST — upload a new photo to Cloudinary and save metadata.
+    POST — upload an encrypted photo to Cloudinary and save metadata.
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -67,22 +83,7 @@ class GalleryListCreateView(APIView):
             return Response({"error": "CLOUDINARY_URL is not configured"}, status=500)
 
         try:
-            cloudinary_uploader = _get_cloudinary_uploader()
-        except Exception as e:
-            return Response({"error": f"Cloudinary SDK not available: {e}"}, status=500)
-
-        # Upload to Cloudinary
-        try:
-            unique_id = f"gallery/{couple_id}/{int(time.time())}_{str(user.id)[-6:]}"
-            result = cloudinary_uploader.upload(
-                file,
-                public_id=unique_id,
-                folder="gallery",
-                overwrite=True,
-                resource_type="image",
-            )
-            image_url = result.get("secure_url") or result.get("url")
-            public_id = result.get("public_id")
+            public_id = upload_encrypted(file)
         except Exception as e:
             return Response({"error": f"Cloudinary upload failed: {e}"}, status=500)
 
@@ -90,12 +91,38 @@ class GalleryListCreateView(APIView):
         photo = GalleryPhoto(
             couple_id=couple_id,
             uploaded_by=str(user.id),
-            image_url=image_url,
+            image_url="",
             cloudinary_public_id=public_id,
         )
         photo.save()
+        photo.image_url = _photo_serve_url(photo.id)
+        photo.save()
 
         return Response(_serialize_photo(photo), status=201)
+
+
+class PhotoServeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, photo_id):
+        user = request.user
+        couple_id = getattr(user, "couple_id", None) or str(user.id)
+
+        try:
+            photo = GalleryPhoto.objects.get(id=photo_id, couple_id=couple_id)
+        except GalleryPhoto.DoesNotExist:
+            return Response({"error": "Photo not found"}, status=404)
+
+        if not photo.cloudinary_public_id:
+            return Response({"error": "Photo is unavailable"}, status=404)
+
+        raw = get_decrypted_photo(photo.cloudinary_public_id)
+
+        def stream():
+            for i in range(0, len(raw), 8192):
+                yield raw[i : i + 8192]
+
+        return StreamingHttpResponse(stream(), content_type="image/jpeg")
 
 
 class GalleryDeleteView(APIView):
@@ -116,10 +143,12 @@ class GalleryDeleteView(APIView):
             return Response({"error": "Only the uploader can delete this photo"}, status=403)
 
         # Delete from Cloudinary
-        if photo.cloudinary_public_id:
+        public_id = photo.cloudinary_public_id or _legacy_public_id(photo.image_url)
+        if public_id:
             try:
                 cloudinary_uploader = _get_cloudinary_uploader()
-                cloudinary_uploader.destroy(photo.cloudinary_public_id, resource_type="image")
+                resource_type = "raw" if str(photo.image_url or "").startswith("/api/gallery/photo/") else "image"
+                cloudinary_uploader.destroy(public_id, resource_type=resource_type)
             except Exception:
                 pass  # non-fatal
 
