@@ -1,5 +1,6 @@
 import mongoengine as me
 from datetime import datetime, timedelta
+from .encryption import EncryptedStringField
 
 
 class Message(me.Document):
@@ -9,12 +10,12 @@ class Message(me.Document):
     sender_role = me.StringField(choices=["gf", "bf"], default=None)
     seen        = me.BooleanField(default=False)
     seen_at     = me.DateTimeField(default=None)
-    text        = me.StringField(required=True)
+    text        = EncryptedStringField(required=True)
     is_deleted  = me.BooleanField(default=False)
     deleted_at  = me.DateTimeField(default=None)
     reply_to_message_id = me.StringField(default=None)
     reply_to_id = me.StringField(default=None)
-    reply_to_text = me.StringField(default=None)
+    reply_to_text = EncryptedStringField(default=None)
     reply_to_sender_name = me.StringField(default=None)
     client_temp_id = me.StringField(default=None)
     mode        = me.StringField(choices=["calm", "vent"], required=True)
