@@ -34,7 +34,7 @@ def _serialize_photo(photo):
 
 
 def _photo_serve_url(photo_id):
-    return f"/api/gallery/photo/{photo_id}/"
+    return f"/gallery/photo/{photo_id}/"
 
 
 def _legacy_public_id(image_url):
@@ -147,7 +147,7 @@ class GalleryDeleteView(APIView):
         if public_id:
             try:
                 cloudinary_uploader = _get_cloudinary_uploader()
-                resource_type = "raw" if str(photo.image_url or "").startswith("/api/gallery/photo/") else "image"
+                resource_type = "raw" if str(photo.image_url or "").startswith("/gallery/photo/") else "image"
                 cloudinary_uploader.destroy(public_id, resource_type=resource_type)
             except Exception:
                 pass  # non-fatal

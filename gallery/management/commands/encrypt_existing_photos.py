@@ -26,7 +26,7 @@ class Command(BaseCommand):
 
         for photo in GalleryPhoto.objects:
             source_url = photo.image_url or None
-            if not source_url or source_url.startswith("/api/gallery/photo/"):
+            if not source_url or source_url.startswith("/gallery/photo/"):
                 skipped += 1
                 continue
 
@@ -45,7 +45,7 @@ class Command(BaseCommand):
                         pass
 
                 photo.cloudinary_public_id = new_public_id
-                photo.image_url = f"/api/gallery/photo/{photo.id}/"
+                photo.image_url = f"/gallery/photo/{photo.id}/"
                 photo.save()
                 updated += 1
             except Exception as exc:
