@@ -74,32 +74,29 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
         )
 
         message = messaging.Message(
-                data=data,
-                webpush=messaging.WebpushConfig(
-                    headers={
-                        "Urgency": "high",
-                        "TTL": "60"
-                    },
-                    fcm_options=messaging.WebpushFCMOptions(
-                        link=chat_url
-                    )
-                ),
-                token=fcm_token,
-            )
+            data=data,  #  REQUIRED for PWA
+
+            # ✅ Keep Android config (no issue)
             android=messaging.AndroidConfig(
                 priority="high",
-                notification=android_notification,
+                notification=messaging.AndroidNotification(
+                    title=str(title or "New message"),
+                    body=str(body or ""),
+                    click_action=chat_url,
+                ),
             ),
+
+            # ✅ Web push config
             webpush=messaging.WebpushConfig(
                 headers={
-                    # Collapse retries for same logical notification.
-                    "Topic": notification_id,
-                    "Urgency": "high",  # High urgency for web push
+                    "Urgency": "high",
+                    "TTL": "60",
                 },
                 fcm_options=messaging.WebpushFCMOptions(
                     link=chat_url
-                ) if frontend_url.startswith("https://") else None,
+                ),
             ),
+
             token=fcm_token,
         )
         response = messaging.send(message)
