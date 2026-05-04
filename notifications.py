@@ -74,11 +74,18 @@ def send_push_notification(fcm_token: str, title: str, body: str, extra_data: di
         )
 
         message = messaging.Message(
-            data=data,
-            notification=messaging.Notification(
-                title=str(title or "New message"),
-                body=str(body or ""),
-            ),
+                data=data,
+                webpush=messaging.WebpushConfig(
+                    headers={
+                        "Urgency": "high",
+                        "TTL": "60"
+                    },
+                    fcm_options=messaging.WebpushFCMOptions(
+                        link=chat_url
+                    )
+                ),
+                token=fcm_token,
+            )
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=android_notification,
